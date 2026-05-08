@@ -2,6 +2,7 @@
 #define ROARING_NODE_ROARINGBITMAP64_RANGES_H_
 
 #include "RoaringBitmap64.h"
+#include "RoaringBitmap64-static-ops.h"
 #include "bigint-utils.h"
 
 namespace RoaringBitmap64_ranges_internal {
@@ -117,6 +118,34 @@ inline void RoaringBitmap64_flipRange(const v8::FunctionCallbackInfo<v8::Value> 
     self->invalidate();
   }
   info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_fromRangeStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+
+  if (info.Length() < 2) {
+    return v8utils::throwTypeError(
+      isolate, "RoaringBitmap64.fromRange expects (start, end[, step])");
+  }
+  uint64_t start, end;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &start, "fromRange start")) return;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[1], &end, "fromRange end")) return;
+
+  uint64_t step = 1;
+  if (info.Length() >= 3 && !info[2]->IsUndefined() && !info[2]->IsNull()) {
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[2], &step, "fromRange step")) return;
+    if (step == 0) step = 1;
+  }
+
+  roaring64_bitmap_t * result = nullptr;
+  if (start < end) {
+    result = roaring64_bitmap_from_range(start, end, step);
+  } else {
+    result = roaring64_bitmap_create();
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
 }
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_RANGES_H_

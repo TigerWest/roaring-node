@@ -3145,6 +3145,48 @@ export class RoaringBitmap64 {
    * this is a debugging aid, not a precise counter.
    */
   static getInstancesCount(): number;
+
+  /**
+   * Ergonomic alias for the constructor:
+   * `RoaringBitmap64.from(values)` is equivalent to
+   * `new RoaringBitmap64(values)`. At runtime
+   * `RoaringBitmap64.from === RoaringBitmap64`.
+   */
+  static from(values?: BigUint64Array | Iterable<bigint>): RoaringBitmap64;
+
+  /**
+   * Returns a new RoaringBitmap64 containing the given BigInt values.
+   * Set semantics: duplicate args are deduplicated. Throws TypeError
+   * if any argument is not a BigInt.
+   */
+  static of(...values: bigint[]): RoaringBitmap64;
+
+  /**
+   * Returns a new bitmap containing every value in the half-open
+   * interval `[start, end)` that is `start + k * step` for some
+   * integer `k >= 0`. `step` defaults to `1n`; `step === 0n` is
+   * treated as `1n`. Returns an empty bitmap if `start >= end`.
+   * Throws TypeError on non-BigInt args, RangeError on negative or
+   * `>= 2^64` bounds, and RangeError on negative `step`.
+   */
+  static fromRange(start: bigint, end: bigint, step?: bigint): RoaringBitmap64;
+
+  /**
+   * Returns a new bitmap with `offset` added to every value of
+   * `input`. Values that overflow `2^64 - 1` (positive offset) or
+   * underflow `0` (negative offset) are silently dropped. The
+   * input bitmap is not modified. `offset` is a signed 64-bit
+   * BigInt; out-of-`int64` values throw RangeError.
+   */
+  static addOffset(input: RoaringBitmap64, offset: bigint): RoaringBitmap64;
+
+  /**
+   * Swaps the contents of two RoaringBitmap64 instances in place.
+   * After the call, `a` holds what `b` had and vice versa; the JS
+   * object identities are preserved. Existing iterators on either
+   * bitmap are invalidated. Throws if either argument is frozen.
+   */
+  static swap(a: RoaringBitmap64, b: RoaringBitmap64): void;
 }
 
 /**

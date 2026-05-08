@@ -175,6 +175,72 @@ ROARINGBITMAP64_STATIC_MANY(xor, roaring64_bitmap_xor_inplace, "RoaringBitmap64.
 
 #undef ROARINGBITMAP64_STATIC_MANY
 
+inline void RoaringBitmap64_addOffsetStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+
+  if (info.Length() < 2) {
+    return v8utils::throwTypeError(isolate, "RoaringBitmap64.addOffset expects 2 arguments");
+  }
+  const RoaringBitmap64 * src = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[0], isolate);
+  if (src == nullptr || src->disposed || src->bitmap == nullptr) {
+    return v8utils::throwTypeError(
+      isolate, "RoaringBitmap64.addOffset first argument must be a non-disposed RoaringBitmap64");
+  }
+  if (!info[1]->IsBigInt()) {
+    return v8utils::throwTypeError(isolate, "RoaringBitmap64.addOffset offset must be a BigInt");
+  }
+  bool lossless = false;
+  int64_t offset = info[1].As<v8::BigInt>()->Int64Value(&lossless);
+  if (!lossless) {
+    isolate->ThrowException(v8::Exception::RangeError(
+      v8::String::NewFromUtf8(
+        isolate,
+        "RoaringBitmap64.addOffset offset out of int64 range",
+        v8::NewStringType::kNormal)
+        .ToLocalChecked()));
+    return;
+  }
+
+  roaring64_bitmap_t * result = roaring64_bitmap_create();
+  if (result == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.addOffset: allocation failed");
+  }
+
+  // Chunked iterator → shift → bulk insert. Bounded peak memory.
+  constexpr uint64_t CHUNK = 4096;
+  uint64_t srcBuf[CHUNK];
+  uint64_t dstBuf[CHUNK];
+  roaring64_iterator_t * it = roaring64_iterator_create(src->bitmap);
+  if (it == nullptr) {
+    roaring64_bitmap_free(result);
+    return v8utils::throwError(isolate, "RoaringBitmap64.addOffset: iterator allocation failed");
+  }
+  while (true) {
+    uint64_t produced = roaring64_iterator_read(it, srcBuf, CHUNK);
+    if (produced == 0) break;
+    uint64_t kept = 0;
+    if (offset >= 0) {
+      uint64_t off = (uint64_t)offset;
+      uint64_t cap = UINT64_MAX - off;
+      for (uint64_t i = 0; i < produced; ++i) {
+        if (srcBuf[i] <= cap) dstBuf[kept++] = srcBuf[i] + off;
+      }
+    } else {
+      // Compute |offset| safely even for INT64_MIN.
+      uint64_t neg = (uint64_t)(-(offset + 1)) + 1;
+      for (uint64_t i = 0; i < produced; ++i) {
+        if (srcBuf[i] >= neg) dstBuf[kept++] = srcBuf[i] - neg;
+      }
+    }
+    if (kept > 0) roaring64_bitmap_add_many(result, kept, dstBuf);
+  }
+  roaring64_iterator_free(it);
+
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
+}
+
 inline void RoaringBitmap64_fromRoaring32Static(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
   AddonData * addonData = AddonData::get(info);
