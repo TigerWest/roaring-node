@@ -12,11 +12,19 @@ class RoaringBitmap64 final : public ObjectWrap {
   // Token verified by ObjectWrap::TryUnwrap. Distinct from the 32-bit token.
   static const constexpr uint64_t OBJECT_TOKEN = 0x21524F4152360000ULL;
 
+  // Mirrors RoaringBitmap32 frozen lifecycle. >0 = soft frozen counter,
+  // 0 = mutable, FROZEN_COUNTER_HARD_FROZEN = frozen view backed by external
+  // bytes. RB64 currently uses only HARD_FROZEN (no soft-freeze use case yet).
+  static const constexpr int64_t FROZEN_COUNTER_SOFT_FROZEN = -1;
+  static const constexpr int64_t FROZEN_COUNTER_HARD_FROZEN = -2;
+
   roaring64_bitmap_t * bitmap;
   int64_t sizeCache;
   int64_t _version;
+  int64_t frozenCounter;
   bool disposed;
   v8::Global<v8::Object> persistent;
+  v8utils::TypedArrayContent<uint8_t> frozenStorage;
 
   inline int64_t getVersion() const { return this->_version; }
 
@@ -24,6 +32,9 @@ class RoaringBitmap64 final : public ObjectWrap {
     this->sizeCache = -1;
     ++this->_version;
   }
+
+  inline bool isFrozen() const { return this->frozenCounter != 0; }
+  inline bool isFrozenHard() const { return this->frozenCounter == FROZEN_COUNTER_HARD_FROZEN; }
 
   inline bool isEmpty() const {
     if (this->sizeCache == 0) return true;
@@ -41,11 +52,28 @@ class RoaringBitmap64 final : public ObjectWrap {
     return (uint64_t)s;
   }
 
+  // Frees the previous bitmap and installs the new one. Resets sizeCache,
+  // bumps _version, clears frozenCounter back to mutable. Caller is
+  // responsible for setting frozenCounter / frozenStorage afterwards when
+  // installing a frozen view.
+  bool replaceBitmapInstance(v8::Isolate * /*isolate*/, roaring64_bitmap_t * newInstance) {
+    roaring64_bitmap_t * oldInstance = this->bitmap;
+    if (oldInstance == newInstance) return false;
+    if (oldInstance != nullptr) {
+      roaring64_bitmap_free(oldInstance);
+    }
+    this->bitmap = newInstance;
+    this->frozenCounter = 0;
+    this->invalidate();
+    return true;
+  }
+
   explicit RoaringBitmap64(AddonData * addonData) :
     ObjectWrap(addonData),
     bitmap(roaring64_bitmap_create()),
     sizeCache(0),
     _version(0),
+    frozenCounter(0),
     disposed(false) {
     ++addonData->RoaringBitmap64_instances;
     _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RoaringBitmap64));
@@ -63,5 +91,22 @@ class RoaringBitmap64 final : public ObjectWrap {
     }
   }
 };
+
+// Returns the unwrapped RoaringBitmap64 or null after throwing. Rejects
+// disposed and hard-frozen instances. Used by every mutating prototype op
+// across main/bulk/ranges/ops headers — defined here so all of them see it.
+inline RoaringBitmap64 * RoaringBitmap64_unwrapForMutation(
+  v8::Isolate * isolate, v8::Local<v8::Object> obj) {
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(obj, isolate);
+  if (self == nullptr || self->disposed) {
+    v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+    return nullptr;
+  }
+  if (self->isFrozenHard()) {
+    v8utils::throwError(isolate, "RoaringBitmap64 is frozen and cannot be modified");
+    return nullptr;
+  }
+  return self;
+}
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_H_

@@ -26,8 +26,7 @@ describe("RoaringBitmap64.statistics", () => {
     b.addRange(0n, 50_000n);
     b.add((1n << 32n) + 7n);
     const s = b.statistics();
-    const sumValues =
-      s.valuesInArrayContainers + s.valuesInRunContainers + s.valuesInBitsetContainers;
+    const sumValues = s.valuesInArrayContainers + s.valuesInRunContainers + s.valuesInBitsetContainers;
     expect(BigInt(sumValues)).toBe(s.size);
   });
 

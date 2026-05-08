@@ -53,4 +53,14 @@ describe("RoaringBitmap64.deserialize buffer shapes", () => {
     expect(result).toBe(b);
     expect(b.toArray()).toEqual(expected);
   });
+
+  it("rejects unsafe_frozen_portable as second arg (no 64-bit C API)", () => {
+    expect(() => (RoaringBitmap64 as any).deserialize(reference, "unsafe_frozen_portable")).toThrow(/frozen|format/);
+  });
+
+  it("rejects unsafe_frozen_croaring as second arg (use unsafeFrozenView instead)", () => {
+    expect(() => (RoaringBitmap64 as any).deserialize(reference, "unsafe_frozen_croaring")).toThrow(
+      /frozen|unsafeFrozenView/,
+    );
+  });
 });

@@ -13,6 +13,7 @@ class AddonDataStrings final {
   v8::Global<v8::String> RoaringBitmap32;
   v8::Global<v8::String> RoaringBitmap64;
   v8::Global<v8::String> RoaringBitmap64Iterator;
+  v8::Global<v8::String> RoaringBitmap64ReverseIterator;
   v8::Global<v8::Symbol> symbol_rnshared;
 
   v8::Global<v8::String> OperationFailed;
@@ -27,6 +28,7 @@ class AddonDataStrings final {
     literal(isolate, this->RoaringBitmap32, "RoaringBitmap32");
     literal(isolate, this->RoaringBitmap64, "RoaringBitmap64");
     literal(isolate, this->RoaringBitmap64Iterator, "RoaringBitmap64Iterator");
+    literal(isolate, this->RoaringBitmap64ReverseIterator, "RoaringBitmap64ReverseIterator");
     literal(isolate, this->Comma, ",");
 
     literal(isolate, this->OperationFailed, "Operation failed");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoaringBitmap64, RoaringBitmap32 } from "../../";
+import { RoaringBitmap32, RoaringBitmap64 } from "../../";
 
 describe("RoaringBitmap64.equals", () => {
   it("compares equal bitmaps", () => {

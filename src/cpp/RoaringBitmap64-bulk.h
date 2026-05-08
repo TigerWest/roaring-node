@@ -107,8 +107,8 @@ inline bool drainIterable(
 
 inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.addMany expects 1 argument");
 
   const uint64_t * data = nullptr;
@@ -136,8 +136,8 @@ inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & 
 
 inline void RoaringBitmap64_removeMany(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.removeMany expects 1 argument");
 
   const uint64_t * data = nullptr;

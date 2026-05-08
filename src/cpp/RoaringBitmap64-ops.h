@@ -26,8 +26,8 @@ inline RoaringBitmap64 * unwrapOther(
 #define ROARINGBITMAP64_INPLACE(NAME, FN, METHODNAME)                                               \
   inline void RoaringBitmap64_##NAME(const v8::FunctionCallbackInfo<v8::Value> & info) {            \
     v8::Isolate * isolate = info.GetIsolate();                                                      \
-    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);          \
-    if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed"); \
+    RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());               \
+    if (self == nullptr) return;                                                                    \
     RoaringBitmap64 * other = RoaringBitmap64_ops_internal::unwrapOther(isolate, info, METHODNAME); \
     if (other == nullptr) return;                                                                   \
     FN(self->bitmap, other->bitmap);                                                                \

@@ -32,10 +32,8 @@ inline bool readHalfOpenRange(
 
 inline void RoaringBitmap64_addRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   uint64_t s, e;
   bool empty;
   if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
@@ -50,10 +48,8 @@ inline void RoaringBitmap64_addRange(const v8::FunctionCallbackInfo<v8::Value> &
 
 inline void RoaringBitmap64_removeRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   uint64_t s, e;
   bool empty;
   if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;

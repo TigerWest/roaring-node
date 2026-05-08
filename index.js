@@ -45,7 +45,13 @@ const { defineProperty } = Reflect;
 
 defineProperty(roaring, "__esModule", { value: true, configurable: true });
 
-const { RoaringBitmap32, RoaringBitmap32BufferedIterator, RoaringBitmap64, RoaringBitmap64Iterator } = roaring;
+const {
+  RoaringBitmap32,
+  RoaringBitmap32BufferedIterator,
+  RoaringBitmap64,
+  RoaringBitmap64Iterator,
+  RoaringBitmap64ReverseIterator,
+} = roaring;
 
 class RoaringBitmap32IteratorResult {
   constructor() {
@@ -636,6 +642,7 @@ if (!roaring[initializedSym]) {
 
   defineValue("RoaringBitmap32Iterator", RoaringBitmap32Iterator, false);
   defineValue("RoaringBitmap32ReverseIterator", RoaringBitmap32ReverseIterator, false);
+  defineValue("RoaringBitmap64ReverseIterator", RoaringBitmap64ReverseIterator, false);
 
   defineValue(
     "SerializationFormat",

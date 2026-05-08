@@ -39,6 +39,9 @@ class AddonData final {
   v8::Global<v8::FunctionTemplate> RoaringBitmap64Iterator_constructorTemplate;
   v8::Global<v8::Function> RoaringBitmap64Iterator_constructor;
 
+  v8::Global<v8::FunctionTemplate> RoaringBitmap64ReverseIterator_constructorTemplate;
+  v8::Global<v8::Function> RoaringBitmap64ReverseIterator_constructor;
+
   v8::Global<v8::External> external;
 
   inline explicit AddonData(v8::Isolate * isolate) :
@@ -67,6 +70,8 @@ class AddonData final {
     RoaringBitmap64_constructor.Reset();
     RoaringBitmap64Iterator_constructorTemplate.Reset();
     RoaringBitmap64Iterator_constructor.Reset();
+    RoaringBitmap64ReverseIterator_constructorTemplate.Reset();
+    RoaringBitmap64ReverseIterator_constructor.Reset();
     external.Reset();
     const int64_t externalSize = -static_cast<int64_t>(sizeof(AddonData)) - 256;
     this->isolate->AdjustAmountOfExternalAllocatedMemory(externalSize);

@@ -8,6 +8,7 @@
 #include "RoaringBitmap64-static-ops.h"
 #include "RoaringBitmap64-serialization.h"
 #include "RoaringBitmap64Iterator.h"
+#include "RoaringBitmap64ReverseIterator.h"
 #include "addon-data.h"
 #include "bigint-utils.h"
 
@@ -81,10 +82,8 @@ inline void RoaringBitmap64_New(const v8::FunctionCallbackInfo<v8::Value> & info
 
 inline void RoaringBitmap64_add(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) {
     return v8utils::throwError(isolate, "RoaringBitmap64.add expects 1 argument");
   }
@@ -97,10 +96,8 @@ inline void RoaringBitmap64_add(const v8::FunctionCallbackInfo<v8::Value> & info
 
 inline void RoaringBitmap64_tryAdd(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) {
     return v8utils::throwError(isolate, "RoaringBitmap64.tryAdd expects 1 argument");
   }
@@ -113,10 +110,8 @@ inline void RoaringBitmap64_tryAdd(const v8::FunctionCallbackInfo<v8::Value> & i
 
 inline void RoaringBitmap64_remove(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) {
     return v8utils::throwError(isolate, "RoaringBitmap64.remove expects 1 argument");
   }
@@ -129,10 +124,8 @@ inline void RoaringBitmap64_remove(const v8::FunctionCallbackInfo<v8::Value> & i
 
 inline void RoaringBitmap64_delete(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   if (info.Length() < 1) {
     return v8utils::throwError(isolate, "RoaringBitmap64.delete expects 1 argument");
   }
@@ -160,10 +153,8 @@ inline void RoaringBitmap64_has(const v8::FunctionCallbackInfo<v8::Value> & info
 
 inline void RoaringBitmap64_clear(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   roaring64_bitmap_clear(self->bitmap);
   self->invalidate();
 }
@@ -190,6 +181,13 @@ inline void RoaringBitmap64_isDisposed_getter(
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   info.GetReturnValue().Set(self == nullptr ? true : self->disposed);
+}
+
+inline void RoaringBitmap64_isFrozen_getter(
+  v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  info.GetReturnValue().Set(self != nullptr && self->isFrozen());
 }
 
 // ---- min / max / clone ----
@@ -319,10 +317,8 @@ inline void RoaringBitmap64_dispose(const v8::FunctionCallbackInfo<v8::Value> & 
 
 inline void RoaringBitmap64_runOptimize(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
-  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
-  if (self == nullptr || self->disposed) {
-    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  }
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
   bool changed = roaring64_bitmap_run_optimize(self->bitmap);
   // Only bump the iterator-version guard when container layout actually
   // changed. When changed==false, no in-flight iterator is invalidated, so
@@ -419,6 +415,18 @@ inline void RoaringBitmap64_SymbolIterator(const v8::FunctionCallbackInfo<v8::Va
   }
 }
 
+inline void RoaringBitmap64_reverseIterator(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto cons = addonData->RoaringBitmap64ReverseIterator_constructor.Get(isolate);
+  v8::Local<v8::Value> argv[1] = {info.This()};
+  v8::Local<v8::Object> obj;
+  if (cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&obj)) {
+    info.GetReturnValue().Set(obj);
+  }
+}
+
 // ---- Init ----
 
 inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addonData) {
@@ -462,6 +470,14 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
     (v8::PropertyAttribute)(v8::ReadOnly),
     v8::SideEffectType::kHasNoSideEffect);
 
+  ctorInstanceTemplate->SetNativeDataProperty(
+    NEW_LITERAL_V8_STRING(isolate, "isFrozen", v8::NewStringType::kInternalized),
+    RoaringBitmap64_isFrozen_getter,
+    nullptr,
+    v8::Local<v8::Value>(),
+    (v8::PropertyAttribute)(v8::ReadOnly),
+    v8::SideEffectType::kHasNoSideEffect);
+
   // Element ops
   NODE_SET_PROTOTYPE_METHOD(ctor, "add", RoaringBitmap64_add);
   NODE_SET_PROTOTYPE_METHOD(ctor, "tryAdd", RoaringBitmap64_tryAdd);
@@ -498,6 +514,16 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "serialize", RoaringBitmap64_serialize);
   NODE_SET_PROTOTYPE_METHOD(ctor, "getSerializationSizeInBytes", RoaringBitmap64_getSerializationSizeInBytes);
   NODE_SET_PROTOTYPE_METHOD(ctor, "deserialize", RoaringBitmap64_deserializeInstance);
+  // serializeFileAsync needs addonData via FunctionCallbackInfo::Data() — wire it
+  // through a FunctionTemplate with the external. NODE_SET_PROTOTYPE_METHOD does
+  // not pass external Data, which would leave AsyncWorker without addonData.
+  {
+    v8::Local<v8::FunctionTemplate> sfaTpl =
+      v8::FunctionTemplate::New(isolate, RoaringBitmap64_serializeFileAsync, addonData->external.Get(isolate));
+    ctor->PrototypeTemplate()->Set(
+      NEW_LITERAL_V8_STRING(isolate, "serializeFileAsync", v8::NewStringType::kInternalized),
+      sfaTpl);
+  }
 
   // Range ops
   NODE_SET_PROTOTYPE_METHOD(ctor, "addRange", RoaringBitmap64_addRange);
@@ -517,6 +543,16 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
     v8::Local<v8::FunctionTemplate> iterTpl =
       v8::FunctionTemplate::New(isolate, RoaringBitmap64_SymbolIterator, addonData->external.Get(isolate));
     ctor->PrototypeTemplate()->Set(v8::Symbol::GetIterator(isolate), iterTpl);
+  }
+
+  // reverseIterator — same pattern as Symbol.iterator: needs addonData as Data
+  // because NODE_SET_PROTOTYPE_METHOD does not pass external data.
+  {
+    v8::Local<v8::FunctionTemplate> revTpl =
+      v8::FunctionTemplate::New(isolate, RoaringBitmap64_reverseIterator, addonData->external.Get(isolate));
+    ctor->PrototypeTemplate()->Set(
+      NEW_LITERAL_V8_STRING(isolate, "reverseIterator", v8::NewStringType::kInternalized),
+      revTpl);
   }
 
   auto ctorFunction = ctor->GetFunction(context).ToLocalChecked();
@@ -539,6 +575,12 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   // Static deserialize
   addonData->setMethod(ctorObject, "deserialize", RoaringBitmap64_deserializeStatic);
   addonData->setMethod(ctorObject, "getDeserializationSize", RoaringBitmap64_getDeserializationSizeStatic);
+
+  // Frozen-view static
+  addonData->setMethod(ctorObject, "unsafeFrozenView", RoaringBitmap64_unsafeFrozenViewStatic);
+
+  // Async file I/O
+  addonData->setMethod(ctorObject, "deserializeFileAsync", RoaringBitmap64_deserializeFileAsyncStatic);
 
   ignoreMaybeResult(exports->Set(context, className, ctorFunction));
   addonData->RoaringBitmap64_constructor.Reset(isolate, ctorFunction);

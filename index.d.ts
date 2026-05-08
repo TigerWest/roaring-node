@@ -2716,6 +2716,12 @@ export class RoaringBitmap64 {
   readonly size: bigint;
   readonly isEmpty: boolean;
   readonly isDisposed: boolean;
+  /**
+   * True if this bitmap is a frozen view backed by external bytes.
+   * Frozen views reject mutating operations (`add`, `remove`, `clear`, `addRange`,
+   * etc.) and are produced by `RoaringBitmap64.unsafeFrozenView`.
+   */
+  readonly isFrozen: boolean;
 
   /**
    * Adds the value. Throws TypeError if the value is not a BigInt or
@@ -2754,9 +2760,26 @@ export class RoaringBitmap64 {
   toArray(): bigint[];
   toUint64Array(): BigUint64Array;
 
-  serialize(): Buffer;
+  /**
+   * Serialize the bitmap to a new Buffer.
+   *
+   * - `'portable'` (default): the official Roaring portable format. Round-trips via
+   *   `deserialize` / `deserializeFileAsync`.
+   * - `'unsafe_frozen_croaring'`: CRoaring's frozen format. Buffer must be 64-byte
+   *   aligned when passed back to `unsafeFrozenView`. Cannot be called on a frozen view.
+   */
+  serialize(format?: "portable" | "unsafe_frozen_croaring"): Buffer;
   deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): this;
-  getSerializationSizeInBytes(): bigint;
+  /**
+   * Number of bytes that `serialize(format)` would produce.
+   */
+  getSerializationSizeInBytes(format?: "portable" | "unsafe_frozen_croaring"): bigint;
+
+  /**
+   * Asynchronously serialize the bitmap to a file off the main event loop.
+   * Resolves to this bitmap so it can be chained.
+   */
+  serializeFileAsync(filePath: string, format?: "portable" | "unsafe_frozen_croaring"): Promise<RoaringBitmap64>;
 
   /**
    * Adds every value in `[rangeStart, rangeEnd)` (half-open). Returns this.
@@ -2810,6 +2833,12 @@ export class RoaringBitmap64 {
 
   [Symbol.iterator](): RoaringBitmap64Iterator;
 
+  /**
+   * Returns a new RoaringBitmap64ReverseIterator that yields the values of
+   * this bitmap in strictly-decreasing order.
+   */
+  reverseIterator(): RoaringBitmap64ReverseIterator;
+
   static and(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
   static or(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
   static xor(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
@@ -2844,12 +2873,46 @@ export class RoaringBitmap64 {
 
   static deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): RoaringBitmap64;
   static getDeserializationSize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): bigint;
+
+  /**
+   * Asynchronously read a portable RoaringBitmap64 buffer from a file off the
+   * main event loop. Only the `'portable'` format is supported; for frozen
+   * formats use `unsafeFrozenView` after reading the bytes synchronously.
+   */
+  static deserializeFileAsync(filePath: string, format?: "portable"): Promise<RoaringBitmap64>;
+
+  /**
+   * Construct a read-only RoaringBitmap64 view backed by `buffer`. The buffer
+   * must outlive the returned bitmap and be 64-byte aligned (use
+   * `bufferAlignedAlloc(size, 64)` or `ensureBufferAligned(buf, 64)`).
+   * Mutating the returned bitmap throws.
+   *
+   * Only `'unsafe_frozen_croaring'` is supported; the 64-bit C API has no
+   * portable-frozen format equivalent.
+   */
+  static unsafeFrozenView(
+    format: "unsafe_frozen_croaring",
+    buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+  ): RoaringBitmap64;
 }
 
 /**
  * Forward iterator over the values of a RoaringBitmap64.
  */
 export class RoaringBitmap64Iterator implements IterableIterator<bigint> {
+  next(): IteratorResult<bigint>;
+  [Symbol.iterator](): this;
+}
+
+/**
+ * Reverse iterator over the values of a RoaringBitmap64.
+ *
+ * Yields BigInts from the largest to the smallest. The constructor throws when
+ * `bitmap` is `null`, `undefined`, or a disposed RoaringBitmap64. `next()`
+ * throws if the source bitmap is mutated or disposed mid-iteration.
+ */
+export class RoaringBitmap64ReverseIterator implements IterableIterator<bigint> {
+  constructor(bitmap: RoaringBitmap64);
   next(): IteratorResult<bigint>;
   [Symbol.iterator](): this;
 }
