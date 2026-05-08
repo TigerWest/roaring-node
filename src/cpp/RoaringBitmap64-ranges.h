@@ -73,4 +73,36 @@ inline void RoaringBitmap64_rangeCardinality(const v8::FunctionCallbackInfo<v8::
   info.GetReturnValue().Set(roaring_node_bigint::makeUint64BigInt(isolate, card));
 }
 
+inline void RoaringBitmap64_hasRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  if (empty) {
+    info.GetReturnValue().Set(false);
+    return;
+  }
+  info.GetReturnValue().Set(roaring64_bitmap_contains_range(self->bitmap, s, e));
+}
+
+inline void RoaringBitmap64_intersectsWithRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  if (empty) {
+    info.GetReturnValue().Set(false);
+    return;
+  }
+  info.GetReturnValue().Set(roaring64_bitmap_intersect_with_range(self->bitmap, s, e));
+}
+
 #endif  // ROARING_NODE_ROARINGBITMAP64_RANGES_H_

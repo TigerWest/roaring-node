@@ -984,6 +984,53 @@ if (!roaring[initializedSym]) {
     return m;
   };
 
+  roaringBitmap64_proto.isSubsetOf = function isSubsetOf(other) {
+    if (other instanceof RoaringBitmap64) {
+      return this.isSubset(other);
+    }
+    for (const v of this) {
+      if (!other.has(v)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  roaringBitmap64_proto.isSupersetOf = function isSupersetOf(other) {
+    if (other instanceof RoaringBitmap64) {
+      return this.isSuperset(other);
+    }
+    for (const v of other.keys()) {
+      if (!this.has(v)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  roaringBitmap64_proto.isDisjointFrom = function isDisjointFrom(other) {
+    if (other instanceof RoaringBitmap64) {
+      return !this.intersects(other);
+    }
+    // RB64.size is bigint, Set.size is number — coerce so the smaller-side
+    // pivot comparison is BigInt-on-BigInt.
+    const otherSize = typeof other.size === "bigint" ? other.size : BigInt(other.size);
+    if (this.size <= otherSize) {
+      for (const elem of this) {
+        if (other.has(elem)) {
+          return false;
+        }
+      }
+    } else {
+      for (const elem of other.keys()) {
+        if (this.has(elem)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
   defineValue(
     "SerializationFormat",
     {

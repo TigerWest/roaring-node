@@ -298,6 +298,34 @@ inline void RoaringBitmap64_isStrictSubset(const v8::FunctionCallbackInfo<v8::Va
   info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(self->bitmap, other->bitmap));
 }
 
+inline void RoaringBitmap64_intersects(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.intersects");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(roaring64_bitmap_intersect(self->bitmap, other->bitmap));
+}
+
+inline void RoaringBitmap64_isSuperset(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isSuperset");
+  if (other == nullptr) return;
+  // CRoaring 64-bit exposes only is_subset; superset is the swapped-arg form.
+  info.GetReturnValue().Set(roaring64_bitmap_is_subset(other->bitmap, self->bitmap));
+}
+
+inline void RoaringBitmap64_isStrictSuperset(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isStrictSuperset");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(other->bitmap, self->bitmap));
+}
+
 // ---- Dispose ----
 
 inline void RoaringBitmap64_dispose(const v8::FunctionCallbackInfo<v8::Value> & info) {
@@ -495,8 +523,12 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
 
   // Comparisons
   NODE_SET_PROTOTYPE_METHOD(ctor, "equals", RoaringBitmap64_equals);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "isEqual", RoaringBitmap64_equals);
   NODE_SET_PROTOTYPE_METHOD(ctor, "isSubset", RoaringBitmap64_isSubset);
   NODE_SET_PROTOTYPE_METHOD(ctor, "isStrictSubset", RoaringBitmap64_isStrictSubset);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "intersects", RoaringBitmap64_intersects);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "isSuperset", RoaringBitmap64_isSuperset);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "isStrictSuperset", RoaringBitmap64_isStrictSuperset);
 
   // Bulk
   NODE_SET_PROTOTYPE_METHOD(ctor, "addMany", RoaringBitmap64_addMany);
@@ -529,6 +561,9 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "addRange", RoaringBitmap64_addRange);
   NODE_SET_PROTOTYPE_METHOD(ctor, "removeRange", RoaringBitmap64_removeRange);
   NODE_SET_PROTOTYPE_METHOD(ctor, "rangeCardinality", RoaringBitmap64_rangeCardinality);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "intersectsWithRange", RoaringBitmap64_intersectsWithRange);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "hasRange", RoaringBitmap64_hasRange);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "containsRange", RoaringBitmap64_hasRange);
 
   // Optimization / introspection
   NODE_SET_PROTOTYPE_METHOD(ctor, "runOptimize", RoaringBitmap64_runOptimize);

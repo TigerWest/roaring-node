@@ -2752,6 +2752,58 @@ export class RoaringBitmap64 {
   isSubset(other: RoaringBitmap64): boolean;
   isStrictSubset(other: RoaringBitmap64): boolean;
 
+  /** Alias for {@link equals}. */
+  isEqual(other: RoaringBitmap64): boolean;
+
+  /**
+   * Inverse of {@link isSubset}: returns true iff every value in `other` is
+   * also in this bitmap.
+   */
+  isSuperset(other: RoaringBitmap64): boolean;
+
+  /**
+   * Inverse of {@link isStrictSubset}: superset and strictly larger than `other`.
+   */
+  isStrictSuperset(other: RoaringBitmap64): boolean;
+
+  /**
+   * Returns true iff this bitmap and `other` share at least one value.
+   * Returns false when either bitmap is empty.
+   */
+  intersects(other: RoaringBitmap64): boolean;
+
+  /**
+   * Returns true iff at least one value in `[rangeStart, rangeEnd)` is in
+   * the bitmap. Returns false when `rangeStart >= rangeEnd`.
+   */
+  intersectsWithRange(rangeStart: bigint, rangeEnd: bigint): boolean;
+
+  /**
+   * Returns true iff every value in `[rangeStart, rangeEnd)` is in the
+   * bitmap. Returns false when `rangeStart >= rangeEnd`.
+   */
+  hasRange(rangeStart: bigint, rangeEnd: bigint): boolean;
+  /** Alias for {@link hasRange}, kept for RB32 parity. */
+  containsRange(rangeStart: bigint, rangeEnd: bigint): boolean;
+
+  /**
+   * ES Set protocol alias: returns true iff every value in this bitmap is
+   * also in `other`. Accepts another RoaringBitmap64 (fast path) or any
+   * `ReadonlySetLike<bigint>`.
+   */
+  isSubsetOf(other: ReadonlySetLike<bigint> | RoaringBitmap64): boolean;
+  /**
+   * ES Set protocol alias: returns true iff every value in `other` is in
+   * this bitmap. Accepts another RoaringBitmap64 (fast path) or any
+   * `ReadonlySetLike<bigint>`.
+   */
+  isSupersetOf(other: ReadonlySetLike<bigint> | RoaringBitmap64): boolean;
+  /**
+   * ES Set protocol alias: returns true iff this bitmap and `other` share
+   * no values. Equivalent to `!intersects(other)` for RB64 args.
+   */
+  isDisjointFrom(other: ReadonlySetLike<bigint> | RoaringBitmap64): boolean;
+
   andInPlace(other: RoaringBitmap64): this;
   orInPlace(other: RoaringBitmap64): this;
   xorInPlace(other: RoaringBitmap64): this;
