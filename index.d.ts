@@ -3130,6 +3130,21 @@ export class RoaringBitmap64 {
     format: "unsafe_frozen_croaring",
     buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
   ): RoaringBitmap64;
+
+  /**
+   * Returns the count of live RoaringBitmap64 instances tracked by the
+   * native addon. Useful for debugging memory issues and GC. Counts every
+   * instance ever constructed (including via `clone()`, deserialize, set
+   * ops) until its destructor runs, which happens after V8's garbage
+   * collector finalizes the wrapper — `dispose()` releases the native
+   * bitmap eagerly but does not, on its own, decrement this counter.
+   * Independent of `RoaringBitmap32.getInstancesCount`.
+   *
+   * Returns a JS `number`. The underlying counter is a `uint64_t` and so
+   * could in principle overflow `Number.MAX_SAFE_INTEGER`; in practice
+   * this is a debugging aid, not a precise counter.
+   */
+  static getInstancesCount(): number;
 }
 
 /**

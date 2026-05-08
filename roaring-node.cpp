@@ -18289,6 +18289,13 @@ inline void RoaringBitmap64_reverseIterator(const v8::FunctionCallbackInfo<v8::V
   }
 }
 
+// ---- Diagnostics ----
+
+inline void RoaringBitmap64_getInstanceCountStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  AddonData * addonData = AddonData::get(info);
+  info.GetReturnValue().Set(addonData ? (double)(addonData->RoaringBitmap64_instances) : 0.0);
+}
+
 // ---- Init ----
 
 inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addonData) {
@@ -18445,6 +18452,7 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   addonData->setMethod(ctorObject, "andMany", RoaringBitmap64_andManyStatic);
   addonData->setMethod(ctorObject, "xorMany", RoaringBitmap64_xorManyStatic);
   addonData->setMethod(ctorObject, "fromRoaring32", RoaringBitmap64_fromRoaring32Static);
+  addonData->setMethod(ctorObject, "getInstancesCount", RoaringBitmap64_getInstanceCountStatic);
 
   // Static deserialize
   addonData->setMethod(ctorObject, "deserialize", RoaringBitmap64_deserializeStatic);
