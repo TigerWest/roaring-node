@@ -105,4 +105,18 @@ inline void RoaringBitmap64_intersectsWithRange(const v8::FunctionCallbackInfo<v
   info.GetReturnValue().Set(roaring64_bitmap_intersect_with_range(self->bitmap, s, e));
 }
 
+inline void RoaringBitmap64_flipRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  if (!empty) {
+    roaring64_bitmap_flip_inplace(self->bitmap, s, e);
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
 #endif  // ROARING_NODE_ROARINGBITMAP64_RANGES_H_

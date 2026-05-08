@@ -2856,6 +2856,40 @@ export class RoaringBitmap64 {
   xorInPlace(other: RoaringBitmap64): this;
   andNotInPlace(other: RoaringBitmap64): this;
 
+  /**
+   * Toggles every value in `[rangeStart, rangeEnd)` (half-open) in place.
+   * Returns this. No-op when `rangeStart >= rangeEnd`.
+   */
+  flipRange(rangeStart: bigint, rangeEnd: bigint): this;
+
+  /**
+   * Replaces this bitmap's contents with a deep copy of `other`. Returns
+   * this. Operands are independent afterwards.
+   *
+   * RB32's `copyFrom` also accepts an iterable / Uint32Array; the RB64
+   * version takes only another RoaringBitmap64. For the iterable form,
+   * use `b.clear(); b.addMany(iter)` instead.
+   */
+  copyFrom(other: RoaringBitmap64): this;
+
+  /**
+   * Removes run containers from the bitmap, restoring array/bitset
+   * containers. Returns true iff at least one container changed shape.
+   * Bitmap values are preserved exactly. Useful before a serialization
+   * that wants smaller per-container overhead.
+   */
+  removeRunCompression(): boolean;
+
+  /**
+   * Releases unused memory in the bitmap's container backing stores.
+   * Returns the number of bytes saved. Bitmap values are preserved
+   * exactly. Returns 0n when nothing could be shrunk.
+   *
+   * RB32 returns `number`; RB64 returns `bigint` because the bitmap
+   * sizes (and therefore potential savings) can exceed 2^53.
+   */
+  shrinkToFit(): bigint;
+
   toArray(): bigint[];
   toUint64Array(): BigUint64Array;
 

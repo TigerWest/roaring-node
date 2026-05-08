@@ -326,6 +326,28 @@ inline void RoaringBitmap64_isStrictSuperset(const v8::FunctionCallbackInfo<v8::
   info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(other->bitmap, self->bitmap));
 }
 
+// ---- copyFrom ----
+
+inline void RoaringBitmap64_copyFrom(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
+  RoaringBitmap64 * other =
+    RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.copyFrom");
+  if (other == nullptr) return;
+  if (other == self) {
+    self->invalidate();
+    info.GetReturnValue().Set(info.This());
+    return;
+  }
+  roaring64_bitmap_t * copy = roaring64_bitmap_copy(other->bitmap);
+  if (copy == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.copyFrom: allocation failed");
+  }
+  self->replaceBitmapInstance(isolate, copy);
+  info.GetReturnValue().Set(info.This());
+}
+
 // ---- Dispose ----
 
 inline void RoaringBitmap64_dispose(const v8::FunctionCallbackInfo<v8::Value> & info) {
@@ -353,6 +375,53 @@ inline void RoaringBitmap64_runOptimize(const v8::FunctionCallbackInfo<v8::Value
   // forcing them to throw "mutated" would be a false positive.
   if (changed) self->invalidate();
   info.GetReturnValue().Set(v8::Boolean::New(isolate, changed));
+}
+
+inline void RoaringBitmap64_removeRunCompression(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
+
+  // CRoaring 64-bit has no roaring64_bitmap_remove_run_compression. Detect
+  // run containers via statistics; if any exist, materialize the values and
+  // rebuild the bitmap (clear + add_many). add_many produces only
+  // array/bitset containers, so the rebuilt bitmap has runContainers == 0.
+  roaring64_statistics_t st;
+  roaring64_bitmap_statistics(self->bitmap, &st);
+  if (st.n_run_containers == 0) {
+    info.GetReturnValue().Set(false);
+    return;
+  }
+
+  uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
+  std::vector<uint64_t> values;
+  if (card > 0) {
+    if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
+      return v8utils::throwError(
+        isolate, "RoaringBitmap64.removeRunCompression: cardinality exceeds size_t limit");
+    }
+    values.resize((size_t)card);
+    roaring64_bitmap_to_uint64_array(self->bitmap, values.data());
+  }
+  roaring64_bitmap_clear(self->bitmap);
+  if (!values.empty()) {
+    roaring64_bitmap_add_many(self->bitmap, values.size(), values.data());
+  }
+  self->invalidate();
+  info.GetReturnValue().Set(true);
+}
+
+inline void RoaringBitmap64_shrinkToFit(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
+  if (self == nullptr) return;
+  size_t saved = roaring64_bitmap_shrink_to_fit(self->bitmap);
+  // Conservatively bump _version when bytes were saved: shrink can
+  // reallocate container backing stores, and our iterators read those
+  // pointers directly. Matches the runOptimize "invalidate iff layout
+  // moved" rule.
+  if (saved > 0) self->invalidate();
+  info.GetReturnValue().Set(roaring_node_bigint::makeUint64BigInt(isolate, (uint64_t)saved));
 }
 
 inline void RoaringBitmap64_statistics(const v8::FunctionCallbackInfo<v8::Value> & info) {
@@ -520,6 +589,7 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "minimum", RoaringBitmap64_minimum);
   NODE_SET_PROTOTYPE_METHOD(ctor, "maximum", RoaringBitmap64_maximum);
   NODE_SET_PROTOTYPE_METHOD(ctor, "clone", RoaringBitmap64_clone);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "copyFrom", RoaringBitmap64_copyFrom);
 
   // Comparisons
   NODE_SET_PROTOTYPE_METHOD(ctor, "equals", RoaringBitmap64_equals);
@@ -564,9 +634,12 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "intersectsWithRange", RoaringBitmap64_intersectsWithRange);
   NODE_SET_PROTOTYPE_METHOD(ctor, "hasRange", RoaringBitmap64_hasRange);
   NODE_SET_PROTOTYPE_METHOD(ctor, "containsRange", RoaringBitmap64_hasRange);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "flipRange", RoaringBitmap64_flipRange);
 
   // Optimization / introspection
   NODE_SET_PROTOTYPE_METHOD(ctor, "runOptimize", RoaringBitmap64_runOptimize);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "removeRunCompression", RoaringBitmap64_removeRunCompression);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "shrinkToFit", RoaringBitmap64_shrinkToFit);
   NODE_SET_PROTOTYPE_METHOD(ctor, "statistics", RoaringBitmap64_statistics);
   NODE_SET_PROTOTYPE_METHOD(ctor, "internalValidate", RoaringBitmap64_internalValidate);
 
