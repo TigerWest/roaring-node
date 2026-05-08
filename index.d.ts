@@ -2839,6 +2839,98 @@ export class RoaringBitmap64 {
    */
   reverseIterator(): RoaringBitmap64ReverseIterator;
 
+  /** Same as `[Symbol.iterator]()` — for Set<bigint> compatibility. */
+  keys(): RoaringBitmap64Iterator;
+  /** Same as `[Symbol.iterator]()` — for Set<bigint> compatibility. */
+  values(): RoaringBitmap64Iterator;
+  /** Yields `[v, v]` BigInt pairs — for Set<bigint> compatibility. */
+  entries(): IterableIterator<[bigint, bigint]>;
+
+  /** Always `"Set"` — RB64 participates in the Set-like duck-typing convention. */
+  readonly [Symbol.toStringTag]: "Set";
+
+  /** Calls `fn(value, index, this)` for each value in ascending order. */
+  forEach<This = unknown>(fn: (this: This, value: bigint, index: number, set: this) => void, thisArg?: This): this;
+
+  /** Returns a new array with `fn(value, index, this)` applied to each value. */
+  map<U, This = unknown>(
+    fn: (this: This, value: bigint, index: number, set: this) => U,
+    thisArg?: This,
+    output?: U[],
+  ): U[];
+
+  /** Returns a new array of the values for which `predicate` returns truthy. */
+  filter(
+    predicate: (value: bigint, index: number, set: this) => boolean,
+    thisArg?: unknown,
+    output?: bigint[],
+  ): bigint[];
+
+  /** Returns true iff `predicate` returns truthy for every value. */
+  every(predicate: (value: bigint, index: number, set: this) => boolean, thisArg?: unknown): boolean;
+  /** Returns true iff `predicate` returns truthy for at least one value. */
+  some(predicate: (value: bigint, index: number, set: this) => boolean, thisArg?: unknown): boolean;
+
+  /** Returns the first value for which `predicate` is truthy, or undefined. */
+  find(predicate: (value: bigint, index: number, set: this) => boolean, thisArg?: unknown): bigint | undefined;
+  /** Returns the index of the first value for which `predicate` is truthy, or -1. */
+  findIndex(predicate: (value: bigint, index: number, set: this) => boolean, thisArg?: unknown): number;
+
+  /** Returns the rank of `value` if present, otherwise -1. */
+  indexOf(value: unknown, fromIndex?: number): number;
+  /** Same as `indexOf` for set-like containers (each value appears at most once). */
+  lastIndexOf(value: unknown, fromIndex?: number): number;
+
+  /** Returns the value at the given zero-based index (negative counts from end), or undefined. */
+  at(index: number): bigint | undefined;
+
+  /** Reduce, walking ascending. */
+  reduce(callbackfn: (previousValue: bigint, currentValue: bigint, currentIndex: number, set: this) => bigint): bigint;
+  reduce(
+    callbackfn: (previousValue: bigint, currentValue: bigint, currentIndex: number, set: this) => bigint,
+    initialValue: bigint,
+  ): bigint;
+  reduce<U>(
+    callbackfn: (previousValue: U, currentValue: bigint, currentIndex: number, set: this) => U,
+    initialValue: U,
+  ): U;
+
+  /** Reduce, walking descending. */
+  reduceRight(
+    callbackfn: (previousValue: bigint, currentValue: bigint, currentIndex: number, set: this) => bigint,
+  ): bigint;
+  reduceRight(
+    callbackfn: (previousValue: bigint, currentValue: bigint, currentIndex: number, set: this) => bigint,
+    initialValue: bigint,
+  ): bigint;
+  reduceRight<U>(
+    callbackfn: (previousValue: U, currentValue: bigint, currentIndex: number, set: this) => U,
+    initialValue: U,
+  ): U;
+
+  /** Joins the values into a single string. Default separator is `","`. */
+  join(separator?: string): string;
+  /** Returns the literal `"RoaringBitmap64"`. */
+  toString(): string;
+  /** Returns a string of the form `"[v1,v2,...]"`, truncated with `"..."` past `maxLength` (default 32000). */
+  contentToString(maxLength?: number): string;
+
+  /** Returns a new `Set<bigint>` containing every value (or appends to `output`). */
+  toSet(maxLength?: number): Set<bigint>;
+  toSet(output: Set<bigint>, maxLength?: number): Set<bigint>;
+
+  /** Returns a new array. With no comparator equivalent to `toArray()`. */
+  toSorted(cmp?: (a: bigint, b: bigint) => number): bigint[];
+  /** Returns a new array containing every value in descending order. */
+  toReversed(): bigint[];
+  /** Returns the same array as `toArray()`. Used by `JSON.stringify`. */
+  toJSON(): bigint[];
+
+  /** Removes and returns the maximum value, or undefined when empty. */
+  pop(): bigint | undefined;
+  /** Removes and returns the minimum value, or undefined when empty. */
+  shift(): bigint | undefined;
+
   static and(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
   static or(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
   static xor(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;

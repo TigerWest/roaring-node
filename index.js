@@ -644,6 +644,346 @@ if (!roaring[initializedSym]) {
   defineValue("RoaringBitmap32ReverseIterator", RoaringBitmap32ReverseIterator, false);
   defineValue("RoaringBitmap64ReverseIterator", RoaringBitmap64ReverseIterator, false);
 
+  // ---- RoaringBitmap64 array-like / iteration helpers (Tier 3 section A) ----
+
+  const roaringBitmap64_proto = RoaringBitmap64.prototype;
+
+  defineProperty(roaringBitmap64_proto, Symbol.toStringTag, {
+    value: "Set",
+    writable: false,
+    configurable: true,
+    enumerable: false,
+  });
+
+  roaringBitmap64_proto.keys = function keys() {
+    return this[Symbol.iterator]();
+  };
+
+  roaringBitmap64_proto.values = function values() {
+    return this[Symbol.iterator]();
+  };
+
+  roaringBitmap64_proto.entries = function* entries() {
+    for (const v of this) {
+      yield [v, v];
+    }
+  };
+
+  roaringBitmap64_proto.forEach = function forEach(fn, self) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        fn(v, index++, this);
+      }
+    } else {
+      for (const v of this) {
+        fn.call(self, v, index++, this);
+      }
+    }
+    return this;
+  };
+
+  roaringBitmap64_proto.map = function map(fn, self, output) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (!output) {
+      output = new Array(Number(this.size));
+      if (self === undefined) {
+        for (const v of this) {
+          output[index] = fn(v, index++, this);
+        }
+      } else {
+        for (const v of this) {
+          output[index] = fn.call(self, v, index++, this);
+        }
+      }
+      return output;
+    }
+    if (self === undefined) {
+      for (const v of this) {
+        output.push(fn(v, index++, this));
+      }
+    } else {
+      for (const v of this) {
+        output.push(fn.call(self, v, index++, this));
+      }
+    }
+    return output;
+  };
+
+  roaringBitmap64_proto.filter = function filter(fn, self, output = []) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        if (fn(v, index++, this)) {
+          output.push(v);
+        }
+      }
+    } else {
+      for (const v of this) {
+        if (fn.call(self, v, index++, this)) {
+          output.push(v);
+        }
+      }
+    }
+    return output;
+  };
+
+  roaringBitmap64_proto.every = function every(fn, self) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        if (!fn(v, index++, this)) {
+          return false;
+        }
+      }
+    } else {
+      for (const v of this) {
+        if (!fn.call(self, v, index++, this)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  roaringBitmap64_proto.some = function some(fn, self) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        if (fn(v, index++, this)) {
+          return true;
+        }
+      }
+    } else {
+      for (const v of this) {
+        if (fn.call(self, v, index++, this)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  roaringBitmap64_proto.find = function find(fn, self) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        if (fn(v, index++, this)) {
+          return v;
+        }
+      }
+    } else {
+      for (const v of this) {
+        if (fn.call(self, v, index++, this)) {
+          return v;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  roaringBitmap64_proto.findIndex = function findIndex(fn, self) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    if (self === undefined) {
+      for (const v of this) {
+        if (fn(v, index, this)) {
+          return index;
+        }
+        ++index;
+      }
+    } else {
+      for (const v of this) {
+        if (fn.call(self, v, index, this)) {
+          return index;
+        }
+        ++index;
+      }
+    }
+    return -1;
+  };
+
+  roaringBitmap64_proto.indexOf = function indexOf(value, _fromIndex) {
+    if (typeof value !== "bigint") {
+      return -1;
+    }
+    if (!this.has(value)) {
+      return -1;
+    }
+    let i = 0;
+    for (const v of this) {
+      if (v === value) {
+        return i;
+      }
+      ++i;
+    }
+    return -1;
+  };
+
+  roaringBitmap64_proto.lastIndexOf = function lastIndexOf(value, _fromIndex) {
+    return this.indexOf(value);
+  };
+
+  roaringBitmap64_proto.at = function at(index) {
+    if (typeof index !== "number" || !Number.isInteger(index)) {
+      return undefined;
+    }
+    const size = Number(this.size);
+    const target = index < 0 ? size + index : index;
+    if (target < 0 || target >= size) {
+      return undefined;
+    }
+    let i = 0;
+    for (const v of this) {
+      if (i === target) {
+        return v;
+      }
+      ++i;
+    }
+    return undefined;
+  };
+
+  roaringBitmap64_proto.reduce = function reduce(fn, initialValue = 0) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = 0;
+    let accumulator = initialValue;
+    for (const v of this) {
+      accumulator = fn(accumulator, v, index++, this);
+    }
+    return accumulator;
+  };
+
+  roaringBitmap64_proto.reduceRight = function reduceRight(fn, initialValue = 0) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${fn} is not a function`);
+    }
+    let index = Number(this.size) - 1;
+    let accumulator = initialValue;
+    for (const v of this.reverseIterator()) {
+      accumulator = fn(accumulator, v, index--, this);
+    }
+    return accumulator;
+  };
+
+  roaringBitmap64_proto.toSet = function toSet(outputOrMaxLength, maxLength) {
+    let output;
+    let limit;
+    if (outputOrMaxLength instanceof Set) {
+      output = outputOrMaxLength;
+      limit = maxLength;
+    } else {
+      output = new Set();
+      limit = outputOrMaxLength;
+    }
+    if (typeof limit !== "number" || limit < 0) {
+      limit = Infinity;
+    }
+    let count = 0;
+    for (const v of this) {
+      if (count >= limit) {
+        break;
+      }
+      output.add(v);
+      ++count;
+    }
+    return output;
+  };
+
+  roaringBitmap64_proto.toSorted = function toSorted(cmp) {
+    if (cmp !== undefined && typeof cmp !== "function") {
+      throw new TypeError(`${cmp} is not a function`);
+    }
+    const result = this.toArray();
+    return cmp ? result.sort(cmp) : result;
+  };
+
+  roaringBitmap64_proto.toReversed = function toReversed() {
+    const out = [];
+    for (const v of this.reverseIterator()) {
+      out.push(v);
+    }
+    return out;
+  };
+
+  roaringBitmap64_proto.toJSON = function toJSON() {
+    return this.toArray();
+  };
+
+  roaringBitmap64_proto.toString = function () {
+    return "RoaringBitmap64";
+  };
+
+  roaringBitmap64_proto.contentToString = function contentToString(maxLength) {
+    const limit = typeof maxLength === "number" && maxLength >= 0 ? maxLength : 32000;
+    let out = "[";
+    let first = true;
+    for (const v of this) {
+      const piece = first ? v.toString() : "," + v.toString();
+      if (out.length + piece.length + 1 > limit) {
+        out += "...";
+        return out + "]";
+      }
+      out += piece;
+      first = false;
+    }
+    return out + "]";
+  };
+
+  roaringBitmap64_proto.join = function join(separator) {
+    const sep = separator === undefined ? "," : String(separator);
+    let out = "";
+    let first = true;
+    for (const v of this) {
+      if (first) {
+        out = v.toString();
+        first = false;
+      } else {
+        out += sep + v.toString();
+      }
+    }
+    return out;
+  };
+
+  roaringBitmap64_proto.pop = function pop() {
+    const m = this.maximum();
+    if (m === undefined) {
+      return undefined;
+    }
+    this.remove(m);
+    return m;
+  };
+
+  roaringBitmap64_proto.shift = function shift() {
+    const m = this.minimum();
+    if (m === undefined) {
+      return undefined;
+    }
+    this.remove(m);
+    return m;
+  };
+
   defineValue(
     "SerializationFormat",
     {
