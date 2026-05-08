@@ -35,10 +35,21 @@ inline v8::Local<v8::BigInt> makeUint64BigInt(v8::Isolate * isolate, uint64_t va
 // Try to view a value as a contiguous byte buffer (Buffer / Uint8Array /
 // ArrayBuffer / DataView). On success writes *outData and *outLen and
 // returns true. On unsupported type returns false WITHOUT throwing.
+//
+// Detached ArrayBuffers (whether passed directly or via a typed-array /
+// DataView view) are rejected (returns false). Their backing store has
+// been transferred away; reading would surface stale memory or null.
 inline bool tryGetByteBuffer(
   v8::Isolate * /*isolate*/, v8::Local<v8::Value> value, const uint8_t ** outData, size_t * outLen) {
   if (value.IsEmpty()) return false;
   if (node::Buffer::HasInstance(value)) {
+    // node::Buffer is backed by an ArrayBuffer; check detachment via the
+    // wrapped object before reading Data().
+    auto obj = value.As<v8::Object>();
+    if (obj->IsArrayBufferView()) {
+      auto view = obj.As<v8::ArrayBufferView>();
+      if (view->Buffer()->WasDetached()) return false;
+    }
     *outData = reinterpret_cast<const uint8_t *>(node::Buffer::Data(value));
     *outLen = node::Buffer::Length(value);
     return true;
@@ -46,6 +57,7 @@ inline bool tryGetByteBuffer(
   if (value->IsUint8Array()) {
     auto ta = value.As<v8::Uint8Array>();
     auto ab = ta->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
     *outLen = ta->ByteLength();
     return true;
@@ -53,6 +65,7 @@ inline bool tryGetByteBuffer(
   if (value->IsTypedArray()) {
     auto ta = value.As<v8::TypedArray>();
     auto ab = ta->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
     *outLen = ta->ByteLength();
     return true;
@@ -60,12 +73,14 @@ inline bool tryGetByteBuffer(
   if (value->IsDataView()) {
     auto dv = value.As<v8::DataView>();
     auto ab = dv->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + dv->ByteOffset();
     *outLen = dv->ByteLength();
     return true;
   }
   if (value->IsArrayBuffer()) {
     auto ab = value.As<v8::ArrayBuffer>();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data());
     *outLen = ab->ByteLength();
     return true;

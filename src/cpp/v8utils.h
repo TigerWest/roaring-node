@@ -89,6 +89,14 @@ namespace v8utils {
       v8::Exception::TypeError(NEW_LITERAL_V8_STRING(isolate, "Operation failed", v8::NewStringType::kInternalized)));
   }
 
+  inline void throwTypeError(v8::Isolate * isolate, const std::string & message) {
+    throwTypeError(isolate, message.c_str());
+  }
+
+  inline void throwError(v8::Isolate * isolate, const std::string & message) {
+    throwError(isolate, message.c_str());
+  }
+
   void throwTypeError(v8::Isolate * isolate, const char * context, const char * message) {
     v8::HandleScope scope(isolate);
     auto a = v8::String::NewFromUtf8(isolate, context, v8::NewStringType::kInternalized);

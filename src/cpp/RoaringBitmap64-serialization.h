@@ -292,4 +292,82 @@ inline void RoaringBitmap64_deserializeFileAsyncStatic(const v8::FunctionCallbac
   info.GetReturnValue().Set(AsyncWorker::run(worker));
 }
 
+// Instance: serializeAsync(format?, callback?) -> Promise<Buffer>
+inline void RoaringBitmap64_serializeAsync(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64SerializeAsyncWorker(info, ad);
+  // Optional callback may be in any of the two arg slots (format/callback or callback).
+  if (info.Length() >= 2 && info[1]->IsFunction()) {
+    worker->setCallback(info[1]);
+  } else if (info.Length() >= 1 && info[0]->IsFunction()) {
+    worker->setCallback(info[0]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
+// Static: deserializeAsync(buffer, format?, callback?) -> Promise<RoaringBitmap64>
+inline void RoaringBitmap64_deserializeBufferAsyncStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64DeserializeBufferAsyncWorker(info, ad);
+  if (info.Length() >= 3 && info[2]->IsFunction()) {
+    worker->setCallback(info[2]);
+  } else if (info.Length() >= 2 && info[1]->IsFunction()) {
+    worker->setCallback(info[1]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
+// Static: deserializeFile(filePath, format?) -> RoaringBitmap64 (synchronous;
+// blocks the event loop — documented).
+inline void RoaringBitmap64_deserializeFileStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1 || !info[0]->IsString()) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.deserializeFile expects a string filePath");
+  }
+  if (info.Length() >= 2 && !info[1]->IsUndefined()) {
+    DeserializationFormat fmt = tryParseDeserializationFormat(info[1], isolate);
+    if (fmt != DeserializationFormat::portable) {
+      return v8utils::throwError(
+        isolate, "RoaringBitmap64.deserializeFile: only 'portable' is supported");
+    }
+  }
+  v8::String::Utf8Value pathUtf(isolate, info[0]);
+  if (!*pathUtf) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.deserializeFile: invalid filePath");
+  }
+  size_t fileLen = 0;
+  WorkerError err;
+  char * fileBuf = rb64_async_io::readFileFully(*pathUtf, &fileLen, &err);
+  if (err.hasError()) {
+    return v8utils::throwError(
+      isolate, err.msg && err.msg[0] ? err.msg : "RoaringBitmap64.deserializeFile: read failed");
+  }
+  roaring64_bitmap_t * r =
+    roaring64_bitmap_portable_deserialize_safe(fileBuf, fileLen);
+  gcaware_free(fileBuf);
+  if (r == nullptr) {
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.deserializeFile: invalid roaring buffer");
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, r);
+}
+
+// Instance: toUint64ArrayAsync(callback?) -> Promise<BigUint64Array>
+inline void RoaringBitmap64_toUint64ArrayAsync(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64ToUint64ArrayWorker(info, ad);
+  if (info.Length() >= 1 && info[0]->IsFunction()) {
+    worker->setCallback(info[0]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
 #endif  // ROARING_NODE_ROARINGBITMAP64_SERIALIZATION_H_

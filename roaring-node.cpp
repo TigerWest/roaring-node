@@ -10626,6 +10626,14 @@ namespace v8utils {
       v8::Exception::TypeError(NEW_LITERAL_V8_STRING(isolate, "Operation failed", v8::NewStringType::kInternalized)));
   }
 
+  inline void throwTypeError(v8::Isolate * isolate, const std::string & message) {
+    throwTypeError(isolate, message.c_str());
+  }
+
+  inline void throwError(v8::Isolate * isolate, const std::string & message) {
+    throwError(isolate, message.c_str());
+  }
+
   void throwTypeError(v8::Isolate * isolate, const char * context, const char * message) {
     v8::HandleScope scope(isolate);
     auto a = v8::String::NewFromUtf8(isolate, context, v8::NewStringType::kInternalized);
@@ -16081,7 +16089,9 @@ void RoaringBitmap32BufferedIterator_Init(v8::Local<v8::Object> exports, AddonDa
 #ifndef ROARING_NODE_ROARINGBITMAP64_H_
 #define ROARING_NODE_ROARINGBITMAP64_H_
 
-#line 6 "src/cpp/RoaringBitmap64.h"
+#include <string>
+
+#line 8 "src/cpp/RoaringBitmap64.h"
 
 class RoaringBitmap64;
 inline void RoaringBitmap64_WeakCallback(v8::WeakCallbackInfo<RoaringBitmap64> const & info);
@@ -16188,6 +16198,28 @@ inline RoaringBitmap64 * RoaringBitmap64_unwrapForMutation(
   return self;
 }
 
+// Canonical "unwrap the other RoaringBitmap64" helper used by both prototype
+// op-method callbacks (main.h equals/intersects/copyFrom/etc) and the
+// in-place macro in ops.h. Returns the borrowed pointer or nullptr after
+// throwing a TypeError. Tasks 5-7 (rank/select/cardinality/jaccardIndex)
+// use ObjectWrap::TryUnwrap<const RoaringBitmap64> directly with their own
+// readonly pattern.
+inline RoaringBitmap64 * RoaringBitmap64_unwrapOther(
+  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
+  if (info.Length() < 1) {
+    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
+    v8utils::throwTypeError(isolate, msg.c_str());
+    return nullptr;
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other == nullptr || other->disposed) {
+    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
+    v8utils::throwTypeError(isolate, msg.c_str());
+    return nullptr;
+  }
+  return other;
+}
+
 #endif  // ROARING_NODE_ROARINGBITMAP64_H_
 
 #line 1 "src/cpp/RoaringBitmap64-async-workers.h"
@@ -16247,10 +16279,21 @@ inline v8::Local<v8::BigInt> makeUint64BigInt(v8::Isolate * isolate, uint64_t va
 // Try to view a value as a contiguous byte buffer (Buffer / Uint8Array /
 // ArrayBuffer / DataView). On success writes *outData and *outLen and
 // returns true. On unsupported type returns false WITHOUT throwing.
+//
+// Detached ArrayBuffers (whether passed directly or via a typed-array /
+// DataView view) are rejected (returns false). Their backing store has
+// been transferred away; reading would surface stale memory or null.
 inline bool tryGetByteBuffer(
   v8::Isolate * /*isolate*/, v8::Local<v8::Value> value, const uint8_t ** outData, size_t * outLen) {
   if (value.IsEmpty()) return false;
   if (node::Buffer::HasInstance(value)) {
+    // node::Buffer is backed by an ArrayBuffer; check detachment via the
+    // wrapped object before reading Data().
+    auto obj = value.As<v8::Object>();
+    if (obj->IsArrayBufferView()) {
+      auto view = obj.As<v8::ArrayBufferView>();
+      if (view->Buffer()->WasDetached()) return false;
+    }
     *outData = reinterpret_cast<const uint8_t *>(node::Buffer::Data(value));
     *outLen = node::Buffer::Length(value);
     return true;
@@ -16258,6 +16301,7 @@ inline bool tryGetByteBuffer(
   if (value->IsUint8Array()) {
     auto ta = value.As<v8::Uint8Array>();
     auto ab = ta->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
     *outLen = ta->ByteLength();
     return true;
@@ -16265,6 +16309,7 @@ inline bool tryGetByteBuffer(
   if (value->IsTypedArray()) {
     auto ta = value.As<v8::TypedArray>();
     auto ab = ta->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
     *outLen = ta->ByteLength();
     return true;
@@ -16272,12 +16317,14 @@ inline bool tryGetByteBuffer(
   if (value->IsDataView()) {
     auto dv = value.As<v8::DataView>();
     auto ab = dv->Buffer();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + dv->ByteOffset();
     *outLen = dv->ByteLength();
     return true;
   }
   if (value->IsArrayBuffer()) {
     auto ab = value.As<v8::ArrayBuffer>();
+    if (ab->WasDetached()) return false;
     *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data());
     *outLen = ab->ByteLength();
     return true;
@@ -16330,8 +16377,7 @@ inline bool drainIterable(
 
   if (!iterable->IsObject()) {
     auto msg = std::string(paramName) + " must be a BigUint64Array or Iterable<bigint>";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto obj = iterable.As<v8::Object>();
@@ -16339,8 +16385,7 @@ inline bool drainIterable(
   v8::Local<v8::Value> iterFnVal;
   if (!obj->Get(context, iteratorSymbol).ToLocal(&iterFnVal) || !iterFnVal->IsFunction()) {
     auto msg = std::string(paramName) + " must be iterable";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   v8::Local<v8::Value> iterVal;
@@ -16350,8 +16395,7 @@ inline bool drainIterable(
   }
   if (!iterVal->IsObject()) {
     auto msg = std::string(paramName) + ": iterator factory must return an object";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto iter = iterVal.As<v8::Object>();
@@ -16360,8 +16404,7 @@ inline bool drainIterable(
   if (!iter->Get(context, nextKey).ToLocal(&nextFnVal)) return false;
   if (!nextFnVal->IsFunction()) {
     auto msg = std::string(paramName) + ": iterator must have a next() method";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto nextFn = nextFnVal.As<v8::Function>();
@@ -16383,8 +16426,7 @@ inline bool drainIterable(
     if (!nextFn->Call(context, iter, 0, nullptr).ToLocal(&stepVal)) return false;
     if (!stepVal->IsObject()) {
       auto msg = std::string(paramName) + ": iterator next() must return an object";
-      isolate->ThrowException(v8::Exception::TypeError(
-        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      v8utils::throwTypeError(isolate, msg);
       return false;
     }
     auto step = stepVal.As<v8::Object>();
@@ -16407,6 +16449,27 @@ inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & 
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
   if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.addMany expects 1 argument");
+
+  // RoaringBitmap64 source — fast path via roaring64_bitmap_or_inplace. We
+  // detect via the constructor template (HasInstance) so disposed/foreign
+  // instances fall through to the iterable path and surface the same errors
+  // they would today.
+  v8::Local<v8::Value> arg = info[0];
+  if (arg->IsObject()) {
+    AddonData * addonData = self->addonData;
+    if (addonData != nullptr &&
+        addonData->RoaringBitmap64_constructorTemplate.Get(isolate)->HasInstance(arg)) {
+      const RoaringBitmap64 * other = ObjectWrap::TryUnwrap<const RoaringBitmap64>(arg, isolate);
+      if (other != nullptr && !other->disposed && other->bitmap != nullptr) {
+        if (other != self) {
+          roaring64_bitmap_or_inplace(self->bitmap, other->bitmap);
+          self->invalidate();
+        }
+        info.GetReturnValue().Set(info.This());
+        return;
+      }
+    }
+  }
 
   const uint64_t * data = nullptr;
   size_t n = 0;
@@ -16465,11 +16528,33 @@ inline void RoaringBitmap64_toUint64Array(const v8::FunctionCallbackInfo<v8::Val
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
   uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
-  if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds size_t limit");
+  // Cap at node::Buffer::kMaxLength (~2GiB on 32-bit nodes, larger on 64-bit).
+  // The previous 0xFFFFFFFFu cap was a 32-bit-style guard inherited from RB32;
+  // RB64's whole point is going beyond 32-bit, so we lift it to the actual
+  // V8/Node TypedArray size limit.
+  if (card > (uint64_t)(node::Buffer::kMaxLength / sizeof(uint64_t))) {
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds maximum array length");
   }
-  if (card > (uint64_t)0xFFFFFFFFu) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds TypedArray length limit");
+  // Out-buffer overload: callers may pass an existing BigUint64Array to fill
+  // (avoids the per-call allocation). Returns the same typed array.
+  if (info.Length() >= 1 && info[0]->IsBigUint64Array()) {
+    v8::Local<v8::BigUint64Array> typed = info[0].As<v8::BigUint64Array>();
+    if ((uint64_t)typed->Length() < card) {
+      return v8utils::throwError(
+        isolate, "RoaringBitmap64.toUint64Array: provided buffer is too small");
+    }
+    uint64_t * dst = reinterpret_cast<uint64_t *>(
+      static_cast<uint8_t *>(typed->Buffer()->GetBackingStore()->Data()) + typed->ByteOffset());
+    if (card > 0) {
+      if (dst == nullptr) {
+        return v8utils::throwError(
+          isolate, "RoaringBitmap64.toUint64Array: provided buffer backing store is null");
+      }
+      roaring64_bitmap_to_uint64_array(self->bitmap, dst);
+    }
+    info.GetReturnValue().Set(typed);
+    return;
   }
   size_t byteLen = (size_t)card * sizeof(uint64_t);
   auto ab = v8::ArrayBuffer::New(isolate, byteLen);
@@ -16584,20 +16669,93 @@ inline bool writeFileFully(const char * path, const char * data, size_t len, Wor
 
 class RB64SerializeFileWorker final : public AsyncWorker {
  public:
-  const v8::FunctionCallbackInfo<v8::Value> & info;
   v8::Global<v8::Object> bitmapPersistent;
   std::string filePath;
-  // Heap-owned snapshot prepared on the main thread; written off-thread.
+  // Heap-owned snapshot prepared on the main thread (ctor); written off-thread.
   char * snapshot;
   size_t snapshotLen;
 
   explicit RB64SerializeFileWorker(
     const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
     AsyncWorker(infoArg.GetIsolate(), addonDataArg),
-    info(infoArg),
     snapshot(nullptr),
     snapshotLen(0) {
     _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64SerializeFileWorker));
+
+    // All input parsing happens here on the main thread. We must not stash a
+    // reference to `infoArg` and read it later: by the time before() runs,
+    // the V8 callback frame may already have been torn down.
+    v8::Isolate * iso = this->isolate;
+    if (infoArg.Length() < 1 || !infoArg[0]->IsString()) {
+      this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: filePath must be a string"));
+      return;
+    }
+    v8::String::Utf8Value pathUtf(iso, infoArg[0]);
+    if (!*pathUtf) {
+      this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: invalid filePath"));
+      return;
+    }
+    this->filePath.assign(*pathUtf, pathUtf.length());
+
+    bool wantFrozen = false;
+    if (infoArg.Length() >= 2 && !infoArg[1]->IsUndefined()) {
+      SerializationFormat fmt = tryParseSerializationFormat(infoArg[1], iso);
+      if (fmt == SerializationFormat::portable) {
+        wantFrozen = false;
+      } else if (fmt == SerializationFormat::unsafe_frozen_croaring) {
+        wantFrozen = true;
+      } else {
+        this->setError(WorkerError(
+          "RoaringBitmap64.serializeFileAsync: format must be 'portable' or 'unsafe_frozen_croaring'"));
+      return;
+      }
+    }
+
+    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(infoArg.This(), iso);
+    if (self == nullptr || self->disposed) {
+      this->setError(WorkerError("RoaringBitmap64 is disposed"));
+      return;
+    }
+    if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
+    this->bitmapPersistent.Reset(iso, infoArg.This());
+
+    if (wantFrozen) {
+      if (self->isFrozenHard()) {
+        this->setError(WorkerError(
+          "RoaringBitmap64.serializeFileAsync(frozen) cannot operate on a frozen view"));
+      return;
+      }
+      roaring64_bitmap_shrink_to_fit(self->bitmap);
+      size_t size = roaring64_bitmap_frozen_size_in_bytes(self->bitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
+      return;
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_frozen_serialize(self->bitmap, this->snapshot);
+        if (w != size) {
+          this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: frozen size mismatch"));
+      return;
+        }
+      }
+      this->snapshotLen = size;
+    } else {
+      size_t size = roaring64_bitmap_portable_size_in_bytes(self->bitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
+      return;
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_portable_serialize(self->bitmap, this->snapshot);
+        if (w != size) {
+          this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: portable size mismatch"));
+      return;
+        }
+      }
+      this->snapshotLen = size;
+    }
   }
 
   ~RB64SerializeFileWorker() override {
@@ -16607,68 +16765,7 @@ class RB64SerializeFileWorker final : public AsyncWorker {
 
  protected:
   void before() final {
-    v8::Isolate * iso = this->isolate;
-    if (this->info.Length() < 1 || !this->info[0]->IsString()) {
-      return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: filePath must be a string"));
-    }
-    v8::String::Utf8Value pathUtf(iso, this->info[0]);
-    if (!*pathUtf) {
-      return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: invalid filePath"));
-    }
-    this->filePath.assign(*pathUtf, pathUtf.length());
-
-    bool wantFrozen = false;
-    if (this->info.Length() >= 2 && !this->info[1]->IsUndefined()) {
-      SerializationFormat fmt = tryParseSerializationFormat(this->info[1], iso);
-      if (fmt == SerializationFormat::portable) {
-        wantFrozen = false;
-      } else if (fmt == SerializationFormat::unsafe_frozen_croaring) {
-        wantFrozen = true;
-      } else {
-        return this->setError(
-          WorkerError("RoaringBitmap64.serializeFileAsync: format must be 'portable' or 'unsafe_frozen_croaring'"));
-      }
-    }
-
-    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(this->info.This(), iso);
-    if (self == nullptr || self->disposed) {
-      return this->setError(WorkerError("RoaringBitmap64 is disposed"));
-    }
-    if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
-    this->bitmapPersistent.Reset(iso, this->info.This());
-
-    if (wantFrozen) {
-      if (self->isFrozenHard()) {
-        return this->setError(
-          WorkerError("RoaringBitmap64.serializeFileAsync(frozen) cannot operate on a frozen view"));
-      }
-      roaring64_bitmap_shrink_to_fit(self->bitmap);
-      size_t size = roaring64_bitmap_frozen_size_in_bytes(self->bitmap);
-      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
-      if (!this->snapshot) {
-        return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
-      }
-      if (size > 0) {
-        size_t w = roaring64_bitmap_frozen_serialize(self->bitmap, this->snapshot);
-        if (w != size) {
-          return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: frozen size mismatch"));
-        }
-      }
-      this->snapshotLen = size;
-    } else {
-      size_t size = roaring64_bitmap_portable_size_in_bytes(self->bitmap);
-      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
-      if (!this->snapshot) {
-        return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
-      }
-      if (size > 0) {
-        size_t w = roaring64_bitmap_portable_serialize(self->bitmap, this->snapshot);
-        if (w != size) {
-          return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: portable size mismatch"));
-        }
-      }
-      this->snapshotLen = size;
-    }
+    // All parsing happened in the ctor. Any error is already on _error.
   }
 
   void work() final {
@@ -16690,7 +16787,6 @@ class RB64SerializeFileWorker final : public AsyncWorker {
 
 class RB64DeserializeFileWorker final : public AsyncWorker {
  public:
-  const v8::FunctionCallbackInfo<v8::Value> & info;
   std::string filePath;
   char * fileBuf;
   size_t fileLen;
@@ -16700,11 +16796,32 @@ class RB64DeserializeFileWorker final : public AsyncWorker {
   explicit RB64DeserializeFileWorker(
     const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
     AsyncWorker(infoArg.GetIsolate(), addonDataArg),
-    info(infoArg),
     fileBuf(nullptr),
     fileLen(0),
     resultBitmap(nullptr) {
     _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64DeserializeFileWorker));
+
+    // Parse and validate inputs synchronously on the main thread; never stash
+    // a reference to `infoArg` for later use.
+    v8::Isolate * iso = this->isolate;
+    if (infoArg.Length() < 1 || !infoArg[0]->IsString()) {
+      this->setError(WorkerError("RoaringBitmap64.deserializeFileAsync: filePath must be a string"));
+      return;
+    }
+    v8::String::Utf8Value pathUtf(iso, infoArg[0]);
+    if (!*pathUtf) {
+      this->setError(WorkerError("RoaringBitmap64.deserializeFileAsync: invalid filePath"));
+      return;
+    }
+    this->filePath.assign(*pathUtf, pathUtf.length());
+    if (infoArg.Length() >= 2 && !infoArg[1]->IsUndefined()) {
+      DeserializationFormat fmt = tryParseDeserializationFormat(infoArg[1], iso);
+      if (fmt != DeserializationFormat::portable) {
+        this->setError(WorkerError(
+          "RoaringBitmap64.deserializeFileAsync: only 'portable' is supported"));
+      return;
+      }
+    }
   }
 
   ~RB64DeserializeFileWorker() override {
@@ -16716,24 +16833,7 @@ class RB64DeserializeFileWorker final : public AsyncWorker {
 
  protected:
   void before() final {
-    v8::Isolate * iso = this->isolate;
-    if (this->info.Length() < 1 || !this->info[0]->IsString()) {
-      return this->setError(
-        WorkerError("RoaringBitmap64.deserializeFileAsync: filePath must be a string"));
-    }
-    v8::String::Utf8Value pathUtf(iso, this->info[0]);
-    if (!*pathUtf) {
-      return this->setError(
-        WorkerError("RoaringBitmap64.deserializeFileAsync: invalid filePath"));
-    }
-    this->filePath.assign(*pathUtf, pathUtf.length());
-    if (this->info.Length() >= 2 && !this->info[1]->IsUndefined()) {
-      DeserializationFormat fmt = tryParseDeserializationFormat(this->info[1], iso);
-      if (fmt != DeserializationFormat::portable) {
-        return this->setError(WorkerError(
-          "RoaringBitmap64.deserializeFileAsync: only 'portable' is supported"));
-      }
-    }
+    // All parsing happened in the ctor.
   }
 
   void work() final {
@@ -16747,6 +16847,216 @@ class RB64DeserializeFileWorker final : public AsyncWorker {
     if (r == nullptr) {
       return this->setError(
         WorkerError("RoaringBitmap64.deserializeFileAsync: invalid roaring buffer"));
+    }
+    this->resultBitmap.store(r, std::memory_order_release);
+  }
+
+  void done(v8::Local<v8::Value> & out) final {
+    v8::Isolate * iso = this->isolate;
+    AddonData * ad = this->maybeAddonData;
+    if (ad == nullptr) {
+      this->setError(WorkerError("Addon data unavailable"));
+      return;
+    }
+    v8::Local<v8::Function> cons = ad->RoaringBitmap64_constructor.Get(iso);
+    v8::Local<v8::Object> newObj;
+    v8::Local<v8::Value> argv[1] = {v8::Undefined(iso)};
+    if (!cons->NewInstance(iso->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+      this->setError(WorkerError("Failed to instantiate RoaringBitmap64"));
+      return;
+    }
+    RoaringBitmap64 * inst = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, iso);
+    if (inst == nullptr) {
+      this->setError(WorkerError(ERROR_INVALID_OBJECT));
+      return;
+    }
+    roaring64_bitmap_t * r = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
+    if (r == nullptr) {
+      this->setError(WorkerError("Deserialization produced no bitmap"));
+      return;
+    }
+    if (inst->bitmap) roaring64_bitmap_free(inst->bitmap);
+    inst->bitmap = r;
+    inst->invalidate();
+    out = newObj;
+  }
+};
+
+// Free callback used by node::Buffer::New when transferring heap ownership of
+// a gcaware_malloc-allocated buffer to V8.
+inline void rb64_async_buffer_free(char * data, void * /*hint*/) {
+  if (data) gcaware_free(data);
+}
+
+class RB64SerializeAsyncWorker final : public AsyncWorker {
+ public:
+  v8::Global<v8::Object> bitmapPersistent;
+  // Borrowed bitmap pointer captured on the main thread. The persistent
+  // above keeps the wrapper (and its bitmap) alive across the worker hop.
+  // CRoaring read-only operations are safe off-thread provided no other
+  // thread mutates the bitmap — this is the standard *Async user contract.
+  const roaring64_bitmap_t * bitmap;
+  // Heap-owned snapshot allocated and filled in work(); done() transfers
+  // ownership to a node::Buffer via rb64_async_buffer_free.
+  char * snapshot;
+  size_t snapshotLen;
+  bool wantFrozen;
+  bool snapshotOwned;
+
+  explicit RB64SerializeAsyncWorker(
+    const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
+    AsyncWorker(infoArg.GetIsolate(), addonDataArg),
+    bitmap(nullptr),
+    snapshot(nullptr),
+    snapshotLen(0),
+    wantFrozen(false),
+    snapshotOwned(true) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64SerializeAsyncWorker));
+
+    v8::Isolate * iso = this->isolate;
+    if (infoArg.Length() >= 1 && !infoArg[0]->IsUndefined() && !infoArg[0]->IsFunction()) {
+      SerializationFormat fmt = tryParseSerializationFormat(infoArg[0], iso);
+      if (fmt == SerializationFormat::portable) {
+        this->wantFrozen = false;
+      } else if (fmt == SerializationFormat::unsafe_frozen_croaring) {
+        this->wantFrozen = true;
+      } else {
+        this->setError(WorkerError(
+          "RoaringBitmap64.serializeAsync: format must be 'portable' or 'unsafe_frozen_croaring'"));
+        return;
+      }
+    }
+
+    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(infoArg.This(), iso);
+    if (self == nullptr || self->disposed) {
+      this->setError(WorkerError("RoaringBitmap64 is disposed"));
+      return;
+    }
+    if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
+    this->bitmapPersistent.Reset(iso, infoArg.This());
+
+    if (this->wantFrozen && self->isFrozenHard()) {
+      this->setError(WorkerError(
+        "RoaringBitmap64.serializeAsync(frozen) cannot operate on a frozen view"));
+      return;
+    }
+    // shrink_to_fit must run on the main thread because it can re-layout
+    // container backing stores; defer the heavier serialization to work().
+    if (this->wantFrozen) {
+      roaring64_bitmap_shrink_to_fit(self->bitmap);
+    }
+    this->bitmap = self->bitmap;
+  }
+
+  ~RB64SerializeAsyncWorker() override {
+    if (snapshotOwned && snapshot) gcaware_free(snapshot);
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64SerializeAsyncWorker));
+  }
+
+ protected:
+  void work() final {
+    if (this->hasError()) return;
+    if (this->bitmap == nullptr) {
+      return this->setError(WorkerError("RoaringBitmap64.serializeAsync: null bitmap"));
+    }
+    if (this->wantFrozen) {
+      size_t size = roaring64_bitmap_frozen_size_in_bytes(this->bitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        return this->setError(WorkerError("RoaringBitmap64.serializeAsync: alloc failed"));
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_frozen_serialize(this->bitmap, this->snapshot);
+        if (w != size) {
+          return this->setError(WorkerError("RoaringBitmap64.serializeAsync: frozen size mismatch"));
+        }
+      }
+      this->snapshotLen = size;
+    } else {
+      size_t size = roaring64_bitmap_portable_size_in_bytes(this->bitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        return this->setError(WorkerError("RoaringBitmap64.serializeAsync: alloc failed"));
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_portable_serialize(this->bitmap, this->snapshot);
+        if (w != size) {
+          return this->setError(WorkerError("RoaringBitmap64.serializeAsync: portable size mismatch"));
+        }
+      }
+      this->snapshotLen = size;
+    }
+  }
+
+  void done(v8::Local<v8::Value> & out) final {
+    v8::Isolate * iso = this->isolate;
+    auto bufMaybe = node::Buffer::New(
+      iso, this->snapshot, this->snapshotLen, &rb64_async_buffer_free, nullptr);
+    v8::Local<v8::Object> buf;
+    if (!bufMaybe.ToLocal(&buf)) {
+      this->setError(WorkerError("RoaringBitmap64.serializeAsync: Buffer alloc failed"));
+      return;
+    }
+    // Buffer now owns snapshot — don't free again in dtor.
+    this->snapshotOwned = false;
+    out = buf;
+  }
+};
+
+class RB64DeserializeBufferAsyncWorker final : public AsyncWorker {
+ public:
+  // Persistent on the source Buffer/ArrayBufferView so the underlying bytes
+  // stay alive across the worker hop.
+  v8::Global<v8::Value> bufferPersistent;
+  // Borrowed pointer + length captured on the main thread. The persistent
+  // above keeps the backing store alive.
+  const uint8_t * dataPtr;
+  size_t dataLen;
+  std::atomic<roaring64_bitmap_t *> resultBitmap;
+
+  explicit RB64DeserializeBufferAsyncWorker(
+    const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
+    AsyncWorker(infoArg.GetIsolate(), addonDataArg),
+    dataPtr(nullptr),
+    dataLen(0),
+    resultBitmap(nullptr) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64DeserializeBufferAsyncWorker));
+
+    v8::Isolate * iso = this->isolate;
+    if (infoArg.Length() < 1) {
+      this->setError(WorkerError("RoaringBitmap64.deserializeAsync expects a buffer argument"));
+      return;
+    }
+    if (infoArg.Length() >= 2 && !infoArg[1]->IsUndefined() && !infoArg[1]->IsFunction()) {
+      DeserializationFormat fmt = tryParseDeserializationFormat(infoArg[1], iso);
+      if (fmt != DeserializationFormat::portable) {
+        this->setError(WorkerError(
+          "RoaringBitmap64.deserializeAsync: only 'portable' is supported"));
+        return;
+      }
+    }
+    if (!roaring_node_bigint::tryGetByteBuffer(iso, infoArg[0], &this->dataPtr, &this->dataLen)) {
+      this->setError(WorkerError(
+        "RoaringBitmap64.deserializeAsync: expected Buffer, Uint8Array, ArrayBuffer, or DataView"));
+      return;
+    }
+    this->bufferPersistent.Reset(iso, infoArg[0]);
+  }
+
+  ~RB64DeserializeBufferAsyncWorker() override {
+    roaring64_bitmap_t * b = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
+    if (b) roaring64_bitmap_free(b);
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64DeserializeBufferAsyncWorker));
+  }
+
+ protected:
+  void work() final {
+    if (this->hasError()) return;
+    roaring64_bitmap_t * r = roaring64_bitmap_portable_deserialize_safe(
+      reinterpret_cast<const char *>(this->dataPtr), this->dataLen);
+    if (r == nullptr) {
+      return this->setError(
+        WorkerError("RoaringBitmap64.deserializeAsync: invalid roaring buffer"));
     }
     this->resultBitmap.store(r, std::memory_order_release);
   }
@@ -16775,6 +17085,87 @@ class RB64DeserializeFileWorker final : public AsyncWorker {
     inst->bitmap = r;
     inst->invalidate();
     out = newObj;
+  }
+};
+
+class RB64ToUint64ArrayWorker final : public AsyncWorker {
+ public:
+  v8::Global<v8::Object> bitmapPersistent;
+  // Borrowed bitmap pointer captured on the main thread. The persistent
+  // above keeps the wrapper (and its bitmap) alive across the hop.
+  const roaring64_bitmap_t * bitmap;
+  // Heap-owned values. work() allocates and fills; done() wraps and transfers.
+  uint64_t * values;
+  size_t valuesLen;
+  bool valuesOwned;
+
+  explicit RB64ToUint64ArrayWorker(
+    const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
+    AsyncWorker(infoArg.GetIsolate(), addonDataArg),
+    bitmap(nullptr),
+    values(nullptr),
+    valuesLen(0),
+    valuesOwned(true) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64ToUint64ArrayWorker));
+
+    v8::Isolate * iso = this->isolate;
+    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(infoArg.This(), iso);
+    if (self == nullptr || self->disposed) {
+      this->setError(WorkerError("RoaringBitmap64 is disposed"));
+      return;
+    }
+    if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
+    this->bitmapPersistent.Reset(iso, infoArg.This());
+    this->bitmap = self->bitmap;
+  }
+
+  ~RB64ToUint64ArrayWorker() override {
+    if (valuesOwned && values) gcaware_free(values);
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64ToUint64ArrayWorker));
+  }
+
+ protected:
+  void work() final {
+    if (this->hasError()) return;
+    if (this->bitmap == nullptr) return;
+    uint64_t card = roaring64_bitmap_get_cardinality(this->bitmap);
+    if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
+      return this->setError(WorkerError(
+        "RoaringBitmap64.toUint64ArrayAsync: cardinality exceeds size_t limit"));
+    }
+    if (card == 0) {
+      this->valuesLen = 0;
+      return;
+    }
+    this->values = static_cast<uint64_t *>(gcaware_malloc((size_t)card * sizeof(uint64_t)));
+    if (!this->values) {
+      return this->setError(WorkerError("RoaringBitmap64.toUint64ArrayAsync: alloc failed"));
+    }
+    roaring64_bitmap_to_uint64_array(this->bitmap, this->values);
+    this->valuesLen = (size_t)card;
+  }
+
+  void done(v8::Local<v8::Value> & out) final {
+    v8::Isolate * iso = this->isolate;
+    if (this->valuesLen == 0) {
+      auto ab = v8::ArrayBuffer::New(iso, 0);
+      out = v8::BigUint64Array::New(ab, 0, 0);
+      return;
+    }
+    size_t byteLen = this->valuesLen * sizeof(uint64_t);
+    std::unique_ptr<v8::BackingStore> bs = v8::ArrayBuffer::NewBackingStore(
+      this->values, byteLen,
+      [](void * data, size_t /*length*/, void * /*deleter_data*/) {
+        if (data) gcaware_free(data);
+      },
+      nullptr);
+    auto ab = v8::ArrayBuffer::New(iso, std::move(bs));
+    // Ownership transferred to the ArrayBuffer's BackingStore the moment we
+    // construct it. Flip the flag now so a later failure (e.g. BigUint64Array
+    // construction) doesn't trigger a double-free in the dtor.
+    this->valuesOwned = false;
+    auto ta = v8::BigUint64Array::New(ab, 0, this->valuesLen);
+    out = ta;
   }
 };
 
@@ -16846,7 +17237,8 @@ class RB64FromArrayAsyncWorker final : public AsyncWorker {
     if (this->hasError()) return;
     roaring64_bitmap_t * r = roaring64_bitmap_create();
     if (r == nullptr) {
-      return this->setError(WorkerError("RoaringBitmap64.fromArrayAsync: create failed"));
+      this->setError(WorkerError("RoaringBitmap64.fromArrayAsync: create failed"));
+      return;
     }
     if (this->valuesLen > 0 && this->values != nullptr) {
       roaring64_bitmap_add_many(r, this->valuesLen, this->values);
@@ -16860,17 +17252,20 @@ class RB64FromArrayAsyncWorker final : public AsyncWorker {
     v8::Isolate * iso = this->isolate;
     AddonData * ad = this->maybeAddonData;
     if (ad == nullptr) {
-      return this->setError(WorkerError("Addon data unavailable"));
+      this->setError(WorkerError("Addon data unavailable"));
+      return;
     }
     v8::Local<v8::Function> cons = ad->RoaringBitmap64_constructor.Get(iso);
     v8::Local<v8::Object> newObj;
     v8::Local<v8::Value> argv[1] = {v8::Undefined(iso)};
     if (!cons->NewInstance(iso->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
-      return this->setError(WorkerError("Failed to instantiate RoaringBitmap64"));
+      this->setError(WorkerError("Failed to instantiate RoaringBitmap64"));
+      return;
     }
     RoaringBitmap64 * inst = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, iso);
     if (inst == nullptr) {
-      return this->setError(WorkerError(ERROR_INVALID_OBJECT));
+      this->setError(WorkerError(ERROR_INVALID_OBJECT));
+      return;
     }
     roaring64_bitmap_t * r = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
     if (r == nullptr) {
@@ -16892,36 +17287,16 @@ class RB64FromArrayAsyncWorker final : public AsyncWorker {
 
 #line 5 "src/cpp/RoaringBitmap64-ops.h"
 
-namespace RoaringBitmap64_ops_internal {
-inline RoaringBitmap64 * unwrapOther(
-  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
-  if (info.Length() < 1) {
-    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
-    return nullptr;
-  }
-  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
-  if (other == nullptr || other->disposed) {
-    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
-    return nullptr;
-  }
-  return other;
-}
-}  // namespace RoaringBitmap64_ops_internal
-
-#define ROARINGBITMAP64_INPLACE(NAME, FN, METHODNAME)                                               \
-  inline void RoaringBitmap64_##NAME(const v8::FunctionCallbackInfo<v8::Value> & info) {            \
-    v8::Isolate * isolate = info.GetIsolate();                                                      \
-    RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());               \
-    if (self == nullptr) return;                                                                    \
-    RoaringBitmap64 * other = RoaringBitmap64_ops_internal::unwrapOther(isolate, info, METHODNAME); \
-    if (other == nullptr) return;                                                                   \
-    FN(self->bitmap, other->bitmap);                                                                \
-    self->invalidate();                                                                             \
-    info.GetReturnValue().Set(info.This());                                                         \
+#define ROARINGBITMAP64_INPLACE(NAME, FN, METHODNAME)                                  \
+  inline void RoaringBitmap64_##NAME(const v8::FunctionCallbackInfo<v8::Value> & info) {\
+    v8::Isolate * isolate = info.GetIsolate();                                          \
+    RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());   \
+    if (self == nullptr) return;                                                        \
+    RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, METHODNAME);   \
+    if (other == nullptr) return;                                                       \
+    FN(self->bitmap, other->bitmap);                                                    \
+    self->invalidate();                                                                 \
+    info.GetReturnValue().Set(info.This());                                             \
   }
 
 ROARINGBITMAP64_INPLACE(andInPlace, roaring64_bitmap_and_inplace, "RoaringBitmap64.andInPlace")
@@ -16930,6 +17305,39 @@ ROARINGBITMAP64_INPLACE(xorInPlace, roaring64_bitmap_xor_inplace, "RoaringBitmap
 ROARINGBITMAP64_INPLACE(andNotInPlace, roaring64_bitmap_andnot_inplace, "RoaringBitmap64.andNotInPlace")
 
 #undef ROARINGBITMAP64_INPLACE
+
+#define ROARINGBITMAP64_INSTANCE_CARD(NAME, FN, METHODNAME)                                          \
+  inline void RoaringBitmap64_##NAME##Cardinality(const v8::FunctionCallbackInfo<v8::Value> & info) {\
+    v8::Isolate * isolate = info.GetIsolate();                                                       \
+    const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);\
+    if (self == nullptr || self->disposed) {                                                         \
+      return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");                            \
+    }                                                                                                \
+    RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, METHODNAME);                \
+    if (other == nullptr) return;                                                                    \
+    uint64_t r = FN(self->bitmap, other->bitmap);                                                    \
+    info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, r));                              \
+  }
+
+ROARINGBITMAP64_INSTANCE_CARD(and, roaring64_bitmap_and_cardinality, "RoaringBitmap64.andCardinality")
+ROARINGBITMAP64_INSTANCE_CARD(or, roaring64_bitmap_or_cardinality, "RoaringBitmap64.orCardinality")
+ROARINGBITMAP64_INSTANCE_CARD(xor, roaring64_bitmap_xor_cardinality, "RoaringBitmap64.xorCardinality")
+ROARINGBITMAP64_INSTANCE_CARD(andNot, roaring64_bitmap_andnot_cardinality, "RoaringBitmap64.andNotCardinality")
+
+#undef ROARINGBITMAP64_INSTANCE_CARD
+
+// jaccardIndex (instance) — mirrors the static jaccardIndex but on prototype.
+inline void RoaringBitmap64_jaccardIndex(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.jaccardIndex");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(
+    v8::Number::New(isolate, roaring64_bitmap_jaccard_index(self->bitmap, other->bitmap)));
+}
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_OPS_H_
 
@@ -16951,16 +17359,14 @@ inline bool unwrapPair(
   const RoaringBitmap64 ** outA, const RoaringBitmap64 ** outB) {
   if (info.Length() < 2) {
     auto msg = std::string(methodName) + " expects two RoaringBitmap64 arguments";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   *outA = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[0], isolate);
   *outB = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[1], isolate);
   if (*outA == nullptr || *outB == nullptr || (*outA)->disposed || (*outB)->disposed) {
     auto msg = std::string(methodName) + " arguments must be non-disposed RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   return true;
@@ -17050,8 +17456,7 @@ inline bool unwrapMany(
   std::vector<const RoaringBitmap64 *> & out) {
   if (!arg->IsArray()) {
     auto msg = std::string(methodName) + " expects an array of RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
@@ -17066,8 +17471,7 @@ inline bool unwrapMany(
     if (b == nullptr) {
       auto msg = std::string(methodName) + ": element at index " + std::to_string(i) +
                  " is not a RoaringBitmap64";
-      isolate->ThrowException(v8::Exception::TypeError(
-        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      v8utils::throwTypeError(isolate, msg);
       return false;
     }
     if (b->disposed) {
@@ -17656,6 +18060,84 @@ inline void RoaringBitmap64_deserializeFileAsyncStatic(const v8::FunctionCallbac
   info.GetReturnValue().Set(AsyncWorker::run(worker));
 }
 
+// Instance: serializeAsync(format?, callback?) -> Promise<Buffer>
+inline void RoaringBitmap64_serializeAsync(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64SerializeAsyncWorker(info, ad);
+  // Optional callback may be in any of the two arg slots (format/callback or callback).
+  if (info.Length() >= 2 && info[1]->IsFunction()) {
+    worker->setCallback(info[1]);
+  } else if (info.Length() >= 1 && info[0]->IsFunction()) {
+    worker->setCallback(info[0]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
+// Static: deserializeAsync(buffer, format?, callback?) -> Promise<RoaringBitmap64>
+inline void RoaringBitmap64_deserializeBufferAsyncStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64DeserializeBufferAsyncWorker(info, ad);
+  if (info.Length() >= 3 && info[2]->IsFunction()) {
+    worker->setCallback(info[2]);
+  } else if (info.Length() >= 2 && info[1]->IsFunction()) {
+    worker->setCallback(info[1]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
+// Static: deserializeFile(filePath, format?) -> RoaringBitmap64 (synchronous;
+// blocks the event loop — documented).
+inline void RoaringBitmap64_deserializeFileStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1 || !info[0]->IsString()) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.deserializeFile expects a string filePath");
+  }
+  if (info.Length() >= 2 && !info[1]->IsUndefined()) {
+    DeserializationFormat fmt = tryParseDeserializationFormat(info[1], isolate);
+    if (fmt != DeserializationFormat::portable) {
+      return v8utils::throwError(
+        isolate, "RoaringBitmap64.deserializeFile: only 'portable' is supported");
+    }
+  }
+  v8::String::Utf8Value pathUtf(isolate, info[0]);
+  if (!*pathUtf) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.deserializeFile: invalid filePath");
+  }
+  size_t fileLen = 0;
+  WorkerError err;
+  char * fileBuf = rb64_async_io::readFileFully(*pathUtf, &fileLen, &err);
+  if (err.hasError()) {
+    return v8utils::throwError(
+      isolate, err.msg && err.msg[0] ? err.msg : "RoaringBitmap64.deserializeFile: read failed");
+  }
+  roaring64_bitmap_t * r =
+    roaring64_bitmap_portable_deserialize_safe(fileBuf, fileLen);
+  gcaware_free(fileBuf);
+  if (r == nullptr) {
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.deserializeFile: invalid roaring buffer");
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, r);
+}
+
+// Instance: toUint64ArrayAsync(callback?) -> Promise<BigUint64Array>
+inline void RoaringBitmap64_toUint64ArrayAsync(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * ad = AddonData::get(info);
+  if (ad == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto * worker = new RB64ToUint64ArrayWorker(info, ad);
+  if (info.Length() >= 1 && info[0]->IsFunction()) {
+    worker->setCallback(info[0]);
+  }
+  info.GetReturnValue().Set(AsyncWorker::run(worker));
+}
+
 #endif  // ROARING_NODE_ROARINGBITMAP64_SERIALIZATION_H_
 
 #line 1 "src/cpp/RoaringBitmap64Iterator.h"
@@ -18124,8 +18606,12 @@ inline void RoaringBitmap64_clear(const v8::FunctionCallbackInfo<v8::Value> & in
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  roaring64_bitmap_clear(self->bitmap);
-  self->invalidate();
+  bool wasNonEmpty = !roaring64_bitmap_is_empty(self->bitmap);
+  if (wasNonEmpty) {
+    roaring64_bitmap_clear(self->bitmap);
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(wasNonEmpty);
 }
 
 // ---- Property getters ----
@@ -18220,31 +18706,11 @@ inline void RoaringBitmap64_clone(const v8::FunctionCallbackInfo<v8::Value> & in
 
 // ---- Comparisons ----
 
-namespace RoaringBitmap64_main_internal {
-inline RoaringBitmap64 * unwrapOther(
-  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
-  if (info.Length() < 1) {
-    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
-    return nullptr;
-  }
-  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
-  if (other == nullptr || other->disposed) {
-    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
-    return nullptr;
-  }
-  return other;
-}
-}  // namespace RoaringBitmap64_main_internal
-
 inline void RoaringBitmap64_equals(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.equals");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.equals");
   if (other == nullptr) return;
   info.GetReturnValue().Set(roaring64_bitmap_equals(self->bitmap, other->bitmap));
 }
@@ -18253,7 +18719,7 @@ inline void RoaringBitmap64_isSubset(const v8::FunctionCallbackInfo<v8::Value> &
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isSubset");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.isSubset");
   if (other == nullptr) return;
   info.GetReturnValue().Set(roaring64_bitmap_is_subset(self->bitmap, other->bitmap));
 }
@@ -18262,7 +18728,7 @@ inline void RoaringBitmap64_isStrictSubset(const v8::FunctionCallbackInfo<v8::Va
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isStrictSubset");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.isStrictSubset");
   if (other == nullptr) return;
   info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(self->bitmap, other->bitmap));
 }
@@ -18271,7 +18737,7 @@ inline void RoaringBitmap64_intersects(const v8::FunctionCallbackInfo<v8::Value>
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.intersects");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.intersects");
   if (other == nullptr) return;
   info.GetReturnValue().Set(roaring64_bitmap_intersect(self->bitmap, other->bitmap));
 }
@@ -18280,7 +18746,7 @@ inline void RoaringBitmap64_isSuperset(const v8::FunctionCallbackInfo<v8::Value>
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isSuperset");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.isSuperset");
   if (other == nullptr) return;
   // CRoaring 64-bit exposes only is_subset; superset is the swapped-arg form.
   info.GetReturnValue().Set(roaring64_bitmap_is_subset(other->bitmap, self->bitmap));
@@ -18290,7 +18756,7 @@ inline void RoaringBitmap64_isStrictSuperset(const v8::FunctionCallbackInfo<v8::
   v8::Isolate * isolate = info.GetIsolate();
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
-  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isStrictSuperset");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.isStrictSuperset");
   if (other == nullptr) return;
   info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(other->bitmap, self->bitmap));
 }
@@ -18301,8 +18767,7 @@ inline void RoaringBitmap64_copyFrom(const v8::FunctionCallbackInfo<v8::Value> &
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  RoaringBitmap64 * other =
-    RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.copyFrom");
+  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.copyFrom");
   if (other == nullptr) return;
   if (other == self) {
     self->invalidate();
@@ -18315,6 +18780,49 @@ inline void RoaringBitmap64_copyFrom(const v8::FunctionCallbackInfo<v8::Value> &
   }
   self->replaceBitmapInstance(isolate, copy);
   info.GetReturnValue().Set(info.This());
+}
+
+// ---- freeze / asReadonlyView ----
+
+inline void RoaringBitmap64_freeze(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  // RB64 only supports HARD_FROZEN (no soft-freeze use case yet); make freeze
+  // idempotent so callers can call it twice without surprises.
+  if (self->frozenCounter != RoaringBitmap64::FROZEN_COUNTER_HARD_FROZEN) {
+    self->frozenCounter = RoaringBitmap64::FROZEN_COUNTER_HARD_FROZEN;
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_asReadonlyView(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (self->isFrozen()) {
+    info.GetReturnValue().Set(info.This());
+    return;
+  }
+  // Decision B (matching the followup-plan): independent frozen clone.
+  AddonData * addonData = self->addonData;
+  roaring64_bitmap_t * copy = roaring64_bitmap_copy(self->bitmap);
+  if (copy == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.asReadonlyView: allocation failed");
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, copy);
+  // Mark the new instance hard-frozen.
+  v8::Local<v8::Value> ret = info.GetReturnValue().Get();
+  if (ret->IsObject()) {
+    RoaringBitmap64 * cloneSelf = ObjectWrap::TryUnwrap<RoaringBitmap64>(ret.As<v8::Object>(), isolate);
+    if (cloneSelf != nullptr) {
+      cloneSelf->frozenCounter = RoaringBitmap64::FROZEN_COUNTER_HARD_FROZEN;
+    }
+  }
 }
 
 // ---- Dispose ----
@@ -18362,20 +18870,31 @@ inline void RoaringBitmap64_removeRunCompression(const v8::FunctionCallbackInfo<
     return;
   }
 
-  uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
-  std::vector<uint64_t> values;
-  if (card > 0) {
-    if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
-      return v8utils::throwError(
-        isolate, "RoaringBitmap64.removeRunCompression: cardinality exceeds size_t limit");
-    }
-    values.resize((size_t)card);
-    roaring64_bitmap_to_uint64_array(self->bitmap, values.data());
+  // Build the rebuilt bitmap in a separate allocation; swap into place only
+  // after the rebuild fully succeeds. Keeps the original intact on OOM.
+  roaring64_bitmap_t * rebuilt = roaring64_bitmap_create();
+  if (rebuilt == nullptr) {
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.removeRunCompression: allocation failed");
   }
-  roaring64_bitmap_clear(self->bitmap);
-  if (!values.empty()) {
-    roaring64_bitmap_add_many(self->bitmap, values.size(), values.data());
+  roaring64_iterator_t * it = roaring64_iterator_create(self->bitmap);
+  if (it == nullptr) {
+    roaring64_bitmap_free(rebuilt);
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.removeRunCompression: iterator allocation failed");
   }
+  constexpr uint64_t CHUNK = 4096;
+  uint64_t buf[CHUNK];
+  while (roaring64_iterator_has_value(it)) {
+    uint64_t produced = roaring64_iterator_read(it, buf, CHUNK);
+    if (produced == 0) break;
+    roaring64_bitmap_add_many(rebuilt, produced, buf);
+  }
+  roaring64_iterator_free(it);
+
+  roaring64_bitmap_t * old = self->bitmap;
+  self->bitmap = rebuilt;
+  roaring64_bitmap_free(old);
   self->invalidate();
   info.GetReturnValue().Set(true);
 }
@@ -18465,6 +18984,42 @@ inline void RoaringBitmap64_internalValidate(const v8::FunctionCallbackInfo<v8::
     const char * msg = reason ? reason : "RoaringBitmap64 internal validation failed";
     return v8utils::throwError(isolate, msg);
   }
+}
+
+// rank: 1-based count of values <= argument.
+inline void RoaringBitmap64_rank(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.rank expects 1 argument");
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  uint64_t r = roaring64_bitmap_rank(self->bitmap, v);
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, r));
+}
+
+// select: returns the value at the given 0-based rank, or undefined if out of range.
+inline void RoaringBitmap64_select(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.select expects 1 argument");
+  }
+  uint64_t rank;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &rank, "rank")) return;
+  uint64_t element = 0;
+  if (!roaring64_bitmap_select(self->bitmap, rank, &element)) {
+    info.GetReturnValue().SetUndefined();
+    return;
+  }
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, element));
 }
 
 // ---- Symbol.iterator ----
@@ -18720,6 +19275,13 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "xorInPlace", RoaringBitmap64_xorInPlace);
   NODE_SET_PROTOTYPE_METHOD(ctor, "andNotInPlace", RoaringBitmap64_andNotInPlace);
 
+  // Instance cardinality + jaccardIndex (parity with RB32)
+  NODE_SET_PROTOTYPE_METHOD(ctor, "andCardinality", RoaringBitmap64_andCardinality);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "orCardinality", RoaringBitmap64_orCardinality);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "xorCardinality", RoaringBitmap64_xorCardinality);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "andNotCardinality", RoaringBitmap64_andNotCardinality);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "jaccardIndex", RoaringBitmap64_jaccardIndex);
+
   // Serialization
   NODE_SET_PROTOTYPE_METHOD(ctor, "serialize", RoaringBitmap64_serialize);
   NODE_SET_PROTOTYPE_METHOD(ctor, "getSerializationSizeInBytes", RoaringBitmap64_getSerializationSizeInBytes);
@@ -18733,6 +19295,22 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
     ctor->PrototypeTemplate()->Set(
       NEW_LITERAL_V8_STRING(isolate, "serializeFileAsync", v8::NewStringType::kInternalized),
       sfaTpl);
+  }
+  // serializeAsync (in-memory) — same FunctionTemplate-with-external pattern.
+  {
+    v8::Local<v8::FunctionTemplate> tpl =
+      v8::FunctionTemplate::New(isolate, RoaringBitmap64_serializeAsync, addonData->external.Get(isolate));
+    ctor->PrototypeTemplate()->Set(
+      NEW_LITERAL_V8_STRING(isolate, "serializeAsync", v8::NewStringType::kInternalized),
+      tpl);
+  }
+  // toUint64ArrayAsync — same FunctionTemplate-with-external pattern.
+  {
+    v8::Local<v8::FunctionTemplate> tpl =
+      v8::FunctionTemplate::New(isolate, RoaringBitmap64_toUint64ArrayAsync, addonData->external.Get(isolate));
+    ctor->PrototypeTemplate()->Set(
+      NEW_LITERAL_V8_STRING(isolate, "toUint64ArrayAsync", v8::NewStringType::kInternalized),
+      tpl);
   }
 
   // Range ops
@@ -18750,6 +19328,12 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "shrinkToFit", RoaringBitmap64_shrinkToFit);
   NODE_SET_PROTOTYPE_METHOD(ctor, "statistics", RoaringBitmap64_statistics);
   NODE_SET_PROTOTYPE_METHOD(ctor, "internalValidate", RoaringBitmap64_internalValidate);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "rank", RoaringBitmap64_rank);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "select", RoaringBitmap64_select);
+
+  // freeze / asReadonlyView (parity with RB32)
+  NODE_SET_PROTOTYPE_METHOD(ctor, "freeze", RoaringBitmap64_freeze);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "asReadonlyView", RoaringBitmap64_asReadonlyView);
 
   // Dispose
   NODE_SET_PROTOTYPE_METHOD(ctor, "dispose", RoaringBitmap64_dispose);
@@ -18811,6 +19395,8 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
 
   // Async file I/O
   addonData->setMethod(ctorObject, "deserializeFileAsync", RoaringBitmap64_deserializeFileAsyncStatic);
+  addonData->setMethod(ctorObject, "deserializeAsync", RoaringBitmap64_deserializeBufferAsyncStatic);
+  addonData->setMethod(ctorObject, "deserializeFile", RoaringBitmap64_deserializeFileStatic);
 
   ignoreMaybeResult(exports->Set(context, className, ctorFunction));
   addonData->RoaringBitmap64_constructor.Reset(isolate, ctorFunction);

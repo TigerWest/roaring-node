@@ -33,8 +33,7 @@ inline bool drainIterable(
 
   if (!iterable->IsObject()) {
     auto msg = std::string(paramName) + " must be a BigUint64Array or Iterable<bigint>";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto obj = iterable.As<v8::Object>();
@@ -42,8 +41,7 @@ inline bool drainIterable(
   v8::Local<v8::Value> iterFnVal;
   if (!obj->Get(context, iteratorSymbol).ToLocal(&iterFnVal) || !iterFnVal->IsFunction()) {
     auto msg = std::string(paramName) + " must be iterable";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   v8::Local<v8::Value> iterVal;
@@ -53,8 +51,7 @@ inline bool drainIterable(
   }
   if (!iterVal->IsObject()) {
     auto msg = std::string(paramName) + ": iterator factory must return an object";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto iter = iterVal.As<v8::Object>();
@@ -63,8 +60,7 @@ inline bool drainIterable(
   if (!iter->Get(context, nextKey).ToLocal(&nextFnVal)) return false;
   if (!nextFnVal->IsFunction()) {
     auto msg = std::string(paramName) + ": iterator must have a next() method";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   auto nextFn = nextFnVal.As<v8::Function>();
@@ -86,8 +82,7 @@ inline bool drainIterable(
     if (!nextFn->Call(context, iter, 0, nullptr).ToLocal(&stepVal)) return false;
     if (!stepVal->IsObject()) {
       auto msg = std::string(paramName) + ": iterator next() must return an object";
-      isolate->ThrowException(v8::Exception::TypeError(
-        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      v8utils::throwTypeError(isolate, msg);
       return false;
     }
     auto step = stepVal.As<v8::Object>();
@@ -110,6 +105,27 @@ inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & 
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
   if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.addMany expects 1 argument");
+
+  // RoaringBitmap64 source — fast path via roaring64_bitmap_or_inplace. We
+  // detect via the constructor template (HasInstance) so disposed/foreign
+  // instances fall through to the iterable path and surface the same errors
+  // they would today.
+  v8::Local<v8::Value> arg = info[0];
+  if (arg->IsObject()) {
+    AddonData * addonData = self->addonData;
+    if (addonData != nullptr &&
+        addonData->RoaringBitmap64_constructorTemplate.Get(isolate)->HasInstance(arg)) {
+      const RoaringBitmap64 * other = ObjectWrap::TryUnwrap<const RoaringBitmap64>(arg, isolate);
+      if (other != nullptr && !other->disposed && other->bitmap != nullptr) {
+        if (other != self) {
+          roaring64_bitmap_or_inplace(self->bitmap, other->bitmap);
+          self->invalidate();
+        }
+        info.GetReturnValue().Set(info.This());
+        return;
+      }
+    }
+  }
 
   const uint64_t * data = nullptr;
   size_t n = 0;
@@ -168,11 +184,33 @@ inline void RoaringBitmap64_toUint64Array(const v8::FunctionCallbackInfo<v8::Val
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
   uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
-  if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds size_t limit");
+  // Cap at node::Buffer::kMaxLength (~2GiB on 32-bit nodes, larger on 64-bit).
+  // The previous 0xFFFFFFFFu cap was a 32-bit-style guard inherited from RB32;
+  // RB64's whole point is going beyond 32-bit, so we lift it to the actual
+  // V8/Node TypedArray size limit.
+  if (card > (uint64_t)(node::Buffer::kMaxLength / sizeof(uint64_t))) {
+    return v8utils::throwError(
+      isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds maximum array length");
   }
-  if (card > (uint64_t)0xFFFFFFFFu) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds TypedArray length limit");
+  // Out-buffer overload: callers may pass an existing BigUint64Array to fill
+  // (avoids the per-call allocation). Returns the same typed array.
+  if (info.Length() >= 1 && info[0]->IsBigUint64Array()) {
+    v8::Local<v8::BigUint64Array> typed = info[0].As<v8::BigUint64Array>();
+    if ((uint64_t)typed->Length() < card) {
+      return v8utils::throwError(
+        isolate, "RoaringBitmap64.toUint64Array: provided buffer is too small");
+    }
+    uint64_t * dst = reinterpret_cast<uint64_t *>(
+      static_cast<uint8_t *>(typed->Buffer()->GetBackingStore()->Data()) + typed->ByteOffset());
+    if (card > 0) {
+      if (dst == nullptr) {
+        return v8utils::throwError(
+          isolate, "RoaringBitmap64.toUint64Array: provided buffer backing store is null");
+      }
+      roaring64_bitmap_to_uint64_array(self->bitmap, dst);
+    }
+    info.GetReturnValue().Set(typed);
+    return;
   }
   size_t byteLen = (size_t)card * sizeof(uint64_t);
   auto ab = v8::ArrayBuffer::New(isolate, byteLen);

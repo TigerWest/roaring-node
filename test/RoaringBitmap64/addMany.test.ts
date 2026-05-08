@@ -45,6 +45,23 @@ describe("RoaringBitmap64.addMany (iterable)", () => {
   });
 });
 
+describe("RoaringBitmap64.addMany (RoaringBitmap64 source)", () => {
+  it("accepts a RoaringBitmap64 source via roaring64_bitmap_or_inplace", () => {
+    const a = new RoaringBitmap64([1n, 2n, 3n]);
+    const b = new RoaringBitmap64([3n, 4n, 5n]);
+    a.addMany(b);
+    expect([...a].sort((x, y) => Number(x - y))).toEqual([1n, 2n, 3n, 4n, 5n]);
+  });
+
+  it("addMany(self) is a no-op (idempotent)", () => {
+    const a = new RoaringBitmap64([1n, 2n, 3n]);
+    const before = a.size;
+    a.addMany(a);
+    expect(a.size).toBe(before);
+    expect([...a]).toEqual([1n, 2n, 3n]);
+  });
+});
+
 describe("RoaringBitmap64.removeMany", () => {
   it("removes via BigUint64Array", () => {
     const b = new RoaringBitmap64();

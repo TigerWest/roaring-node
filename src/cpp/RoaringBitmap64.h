@@ -1,6 +1,8 @@
 #ifndef ROARING_NODE_ROARINGBITMAP64_H_
 #define ROARING_NODE_ROARINGBITMAP64_H_
 
+#include <string>
+
 #include "object-wrap.h"
 #include "v8utils.h"
 
@@ -107,6 +109,28 @@ inline RoaringBitmap64 * RoaringBitmap64_unwrapForMutation(
     return nullptr;
   }
   return self;
+}
+
+// Canonical "unwrap the other RoaringBitmap64" helper used by both prototype
+// op-method callbacks (main.h equals/intersects/copyFrom/etc) and the
+// in-place macro in ops.h. Returns the borrowed pointer or nullptr after
+// throwing a TypeError. Tasks 5-7 (rank/select/cardinality/jaccardIndex)
+// use ObjectWrap::TryUnwrap<const RoaringBitmap64> directly with their own
+// readonly pattern.
+inline RoaringBitmap64 * RoaringBitmap64_unwrapOther(
+  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
+  if (info.Length() < 1) {
+    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
+    v8utils::throwTypeError(isolate, msg.c_str());
+    return nullptr;
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other == nullptr || other->disposed) {
+    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
+    v8utils::throwTypeError(isolate, msg.c_str());
+    return nullptr;
+  }
+  return other;
 }
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_H_

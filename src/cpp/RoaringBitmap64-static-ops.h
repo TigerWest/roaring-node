@@ -13,16 +13,14 @@ inline bool unwrapPair(
   const RoaringBitmap64 ** outA, const RoaringBitmap64 ** outB) {
   if (info.Length() < 2) {
     auto msg = std::string(methodName) + " expects two RoaringBitmap64 arguments";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   *outA = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[0], isolate);
   *outB = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[1], isolate);
   if (*outA == nullptr || *outB == nullptr || (*outA)->disposed || (*outB)->disposed) {
     auto msg = std::string(methodName) + " arguments must be non-disposed RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   return true;
@@ -112,8 +110,7 @@ inline bool unwrapMany(
   std::vector<const RoaringBitmap64 *> & out) {
   if (!arg->IsArray()) {
     auto msg = std::string(methodName) + " expects an array of RoaringBitmap64";
-    isolate->ThrowException(v8::Exception::TypeError(
-      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    v8utils::throwTypeError(isolate, msg);
     return false;
   }
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
@@ -128,8 +125,7 @@ inline bool unwrapMany(
     if (b == nullptr) {
       auto msg = std::string(methodName) + ": element at index " + std::to_string(i) +
                  " is not a RoaringBitmap64";
-      isolate->ThrowException(v8::Exception::TypeError(
-        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      v8utils::throwTypeError(isolate, msg);
       return false;
     }
     if (b->disposed) {

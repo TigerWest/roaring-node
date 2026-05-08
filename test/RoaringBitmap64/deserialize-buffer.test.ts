@@ -63,4 +63,27 @@ describe("RoaringBitmap64.deserialize buffer shapes", () => {
       /frozen|unsafeFrozenView/,
     );
   });
+
+  it("rejects a detached ArrayBuffer (Node >= 21 only)", () => {
+    const ab = new ArrayBuffer(16);
+    if (typeof ab.transfer !== "function") return; // skip on older Node
+    ab.transfer();
+    expect(() => RoaringBitmap64.deserialize(ab)).toThrow();
+  });
+
+  it("rejects a Uint8Array view of a detached ArrayBuffer (Node >= 21 only)", () => {
+    const ab = new ArrayBuffer(16);
+    if (typeof ab.transfer !== "function") return;
+    const u8 = new Uint8Array(ab);
+    ab.transfer();
+    expect(() => RoaringBitmap64.deserialize(u8)).toThrow();
+  });
+
+  it("rejects a DataView of a detached ArrayBuffer (Node >= 21 only)", () => {
+    const ab = new ArrayBuffer(16);
+    if (typeof ab.transfer !== "function") return;
+    const dv = new DataView(ab);
+    ab.transfer();
+    expect(() => RoaringBitmap64.deserialize(dv)).toThrow();
+  });
 });

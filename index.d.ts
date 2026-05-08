@@ -2707,6 +2707,34 @@ export interface RoaringBitmap64Statistics {
  * value space (`0n` to `2n ** 64n - 1n`). Independent of RoaringBitmap32:
  * no cross-type set operations or conversions in this MVP.
  */
+export interface ReadonlyRoaringBitmap64 {
+  readonly size: bigint;
+  readonly isEmpty: boolean;
+  readonly isFrozen: boolean;
+  has(value: bigint): boolean;
+  hasRange(start: bigint, end: bigint): boolean;
+  rangeCardinality(start: bigint, end: bigint): bigint;
+  intersects(other: ReadonlyRoaringBitmap64): boolean;
+  isSubset(other: ReadonlyRoaringBitmap64): boolean;
+  isStrictSubset(other: ReadonlyRoaringBitmap64): boolean;
+  isSuperset(other: ReadonlyRoaringBitmap64): boolean;
+  isStrictSuperset(other: ReadonlyRoaringBitmap64): boolean;
+  equals(other: ReadonlyRoaringBitmap64): boolean;
+  minimum(): bigint | undefined;
+  maximum(): bigint | undefined;
+  rank(value: bigint): bigint;
+  select(rank: bigint): bigint | undefined;
+  jaccardIndex(other: ReadonlyRoaringBitmap64): number;
+  andCardinality(other: ReadonlyRoaringBitmap64): bigint;
+  orCardinality(other: ReadonlyRoaringBitmap64): bigint;
+  xorCardinality(other: ReadonlyRoaringBitmap64): bigint;
+  andNotCardinality(other: ReadonlyRoaringBitmap64): bigint;
+  toArray(): bigint[];
+  toUint64Array(): BigUint64Array;
+  serialize(format?: "portable"): Buffer;
+  [Symbol.iterator](): IterableIterator<bigint>;
+}
+
 export class RoaringBitmap64 {
   /**
    * Creates a RoaringBitmap64. If values are provided, they are added via
@@ -2741,7 +2769,8 @@ export class RoaringBitmap64 {
   has(value: bigint): boolean;
   contains(value: bigint): boolean;
   includes(value: bigint): boolean;
-  clear(): void;
+  /** Clears the bitmap. Returns `true` if it had content, `false` if already empty. */
+  clear(): boolean;
 
   addMany(values: BigUint64Array | Iterable<bigint>): this;
   removeMany(values: BigUint64Array | Iterable<bigint>): this;
@@ -2894,6 +2923,11 @@ export class RoaringBitmap64 {
 
   toArray(): bigint[];
   toUint64Array(): BigUint64Array;
+  /**
+   * Fills `out` with the bitmap's values (BigUint64Array). The provided buffer
+   * must be at least `size` elements long. Returns the same `out` buffer.
+   */
+  toUint64Array(out: BigUint64Array): BigUint64Array;
 
   /**
    * Serialize the bitmap to a new Buffer.
@@ -2915,6 +2949,26 @@ export class RoaringBitmap64 {
    * Resolves to this bitmap so it can be chained.
    */
   serializeFileAsync(filePath: string, format?: "portable" | "unsafe_frozen_croaring"): Promise<RoaringBitmap64>;
+
+  /**
+   * Asynchronously serialize the bitmap to an in-memory Buffer off the main
+   * event loop. The bitmap snapshot is taken synchronously when this method
+   * is called; the actual node::Buffer wrap happens in done().
+   */
+  serializeAsync(format?: "portable" | "unsafe_frozen_croaring"): Promise<Buffer>;
+  serializeAsync(
+    format: "portable" | "unsafe_frozen_croaring",
+    callback: (err: Error | null, buf: Buffer) => void,
+  ): void;
+  serializeAsync(callback: (err: Error | null, buf: Buffer) => void): void;
+
+  /**
+   * Asynchronously dump the bitmap's values into a fresh BigUint64Array off
+   * the main event loop. Useful for very large bitmaps where the
+   * synchronous to_uint64_array would block the event loop.
+   */
+  toUint64ArrayAsync(): Promise<BigUint64Array>;
+  toUint64ArrayAsync(callback: (err: Error | null, arr: BigUint64Array) => void): void;
 
   /**
    * Adds every value in `[rangeStart, rangeEnd)` (half-open). Returns this.
@@ -2963,6 +3017,41 @@ export class RoaringBitmap64 {
    * PostgreSQL `bytea` ingestion path.
    */
   internalValidate(): void;
+
+  /** Returns the 1-based count of values <= `value`. */
+  rank(value: bigint): bigint;
+
+  /** Returns the value at the given 0-based rank, or `undefined` if out of range. */
+  select(rank: bigint): bigint | undefined;
+
+  /** Returns |self ∩ other| without materialising the intersection. */
+  andCardinality(other: RoaringBitmap64): bigint;
+
+  /** Returns |self ∪ other| without materialising the union. */
+  orCardinality(other: RoaringBitmap64): bigint;
+
+  /** Returns |self △ other| without materialising the symmetric difference. */
+  xorCardinality(other: RoaringBitmap64): bigint;
+
+  /** Returns |self \ other| without materialising the difference. */
+  andNotCardinality(other: RoaringBitmap64): bigint;
+
+  /** Returns the Jaccard similarity index of self and other. */
+  jaccardIndex(other: RoaringBitmap64): number;
+
+  /**
+   * Marks this bitmap as hard-frozen so subsequent mutations throw. Idempotent.
+   * Returns this for chaining. RB32 supports both soft and hard freeze; RB64
+   * currently only exposes the hard variant.
+   */
+  freeze(): this;
+
+  /**
+   * Returns a readonly view of this bitmap. If this bitmap is already frozen,
+   * returns this. Otherwise returns an independent hard-frozen clone (mutations
+   * on this remain allowed and do not affect the returned view).
+   */
+  asReadonlyView(): ReadonlyRoaringBitmap64;
 
   dispose(): void;
 
@@ -3118,6 +3207,32 @@ export class RoaringBitmap64 {
    * formats use `unsafeFrozenView` after reading the bytes synchronously.
    */
   static deserializeFileAsync(filePath: string, format?: "portable"): Promise<RoaringBitmap64>;
+
+  /**
+   * Asynchronously deserialize a portable buffer off the main event loop.
+   * Only the `'portable'` format is supported; frozen formats go through
+   * `unsafeFrozenView`.
+   */
+  static deserializeAsync(
+    buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    format?: "portable",
+  ): Promise<RoaringBitmap64>;
+  static deserializeAsync(
+    buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    format: "portable",
+    callback: (err: Error | null, rb: RoaringBitmap64) => void,
+  ): void;
+  static deserializeAsync(
+    buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    callback: (err: Error | null, rb: RoaringBitmap64) => void,
+  ): void;
+
+  /**
+   * Synchronously read a portable RoaringBitmap64 buffer from a file. Blocks
+   * the event loop while reading; use `deserializeFileAsync` in production
+   * code paths where blocking is not acceptable.
+   */
+  static deserializeFile(filePath: string, format?: "portable"): RoaringBitmap64;
 
   /**
    * Construct a read-only RoaringBitmap64 view backed by `buffer`. The buffer
