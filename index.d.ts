@@ -2659,6 +2659,8 @@ export type RoaringBitmap32Callback = (error: Error | null, bitmap: RoaringBitma
 
 export type RoaringBitmap32ArrayCallback = (error: Error | null, bitmap: RoaringBitmap32[] | undefined) => void;
 
+export type RoaringBitmap64Callback = (error: Error | null, bitmap: RoaringBitmap64 | undefined) => void;
+
 /**
  * Layout/density statistics for a {@link RoaringBitmap64}.
  *
@@ -3187,6 +3189,31 @@ export class RoaringBitmap64 {
    * bitmap are invalidated. Throws if either argument is frozen.
    */
   static swap(a: RoaringBitmap64, b: RoaringBitmap64): void;
+
+  /**
+   * Asynchronously builds a RoaringBitmap64 from a `BigUint64Array` or
+   * `Iterable<bigint>` on a libuv worker thread, returning a Promise.
+   * The input is consumed eagerly on the main thread (BigInt parse),
+   * then the bitmap is constructed off-thread. Calling with another
+   * RoaringBitmap64 throws synchronously — use `.clone()` instead.
+   * Optimisation passes (`runOptimize`, `shrinkToFit`) run on the
+   * worker thread before the bitmap is returned.
+   */
+  static fromArrayAsync(values?: BigUint64Array | Iterable<bigint> | null): Promise<RoaringBitmap64>;
+
+  /**
+   * Node-style callback variant: returns `undefined` synchronously,
+   * later invokes `callback(error, bitmap)`.
+   */
+  static fromArrayAsync(
+    values: BigUint64Array | Iterable<bigint> | null | undefined,
+    callback: RoaringBitmap64Callback,
+  ): void;
+
+  /**
+   * Callback-only shorthand: equivalent to `fromArrayAsync(undefined, callback)`.
+   */
+  static fromArrayAsync(callback: RoaringBitmap64Callback): void;
 }
 
 /**

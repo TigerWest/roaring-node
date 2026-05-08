@@ -4,10 +4,14 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "RoaringBitmap64.h"
+#include "RoaringBitmap64-bulk.h"
 #include "async-workers.h"
+#include "bigint-utils.h"
 #include "memory.h"
 #include "serialization-format.h"
 
@@ -264,6 +268,112 @@ class RB64DeserializeFileWorker final : public AsyncWorker {
     roaring64_bitmap_t * r = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
     if (r == nullptr) {
       return this->setError(WorkerError("Deserialization produced no bitmap"));
+    }
+    if (inst->bitmap) roaring64_bitmap_free(inst->bitmap);
+    inst->bitmap = r;
+    inst->invalidate();
+    out = newObj;
+  }
+};
+
+class RB64FromArrayAsyncWorker final : public AsyncWorker {
+ public:
+  uint64_t * values;
+  size_t valuesLen;
+  std::atomic<roaring64_bitmap_t *> resultBitmap;
+
+  explicit RB64FromArrayAsyncWorker(v8::Isolate * iso, AddonData * addonData) :
+    AsyncWorker(iso, addonData),
+    values(nullptr),
+    valuesLen(0),
+    resultBitmap(nullptr) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64FromArrayAsyncWorker));
+  }
+
+  ~RB64FromArrayAsyncWorker() override {
+    if (this->values) gcaware_free(this->values);
+    roaring64_bitmap_t * b = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
+    if (b) roaring64_bitmap_free(b);
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64FromArrayAsyncWorker));
+  }
+
+  // Drains values on the main thread synchronously, before the worker is
+  // queued. Returns false on V8 exception (caller's TryCatch picks it up)
+  // or on a non-V8 setError condition.
+  bool extractValues(v8::Local<v8::Value> arg) {
+    v8::Isolate * iso = this->isolate;
+    if (arg.IsEmpty() || arg->IsNullOrUndefined()) return true;
+
+    const uint64_t * data = nullptr;
+    size_t n = 0;
+    if (roaring_node_bigint::tryGetBigUint64Array(arg, &data, &n)) {
+      if (n == 0) return true;
+      if (data == nullptr) {
+        this->setError(WorkerError(
+          "RoaringBitmap64.fromArrayAsync: BigUint64Array backing store is null (detached?)"));
+        return true;
+      }
+      this->values = static_cast<uint64_t *>(gcaware_malloc(n * sizeof(uint64_t)));
+      if (this->values == nullptr) {
+        this->setError(WorkerError("RoaringBitmap64.fromArrayAsync: alloc failed"));
+        return true;
+      }
+      std::memcpy(this->values, data, n * sizeof(uint64_t));
+      this->valuesLen = n;
+      return true;
+    }
+
+    std::vector<uint64_t> tmp;
+    if (!RoaringBitmap64_bulk_internal::drainIterable(
+          iso, arg, tmp, "fromArrayAsync value")) {
+      return false;
+    }
+    if (tmp.empty()) return true;
+    this->values = static_cast<uint64_t *>(gcaware_malloc(tmp.size() * sizeof(uint64_t)));
+    if (this->values == nullptr) {
+      this->setError(WorkerError("RoaringBitmap64.fromArrayAsync: alloc failed"));
+      return true;
+    }
+    std::memcpy(this->values, tmp.data(), tmp.size() * sizeof(uint64_t));
+    this->valuesLen = tmp.size();
+    return true;
+  }
+
+ protected:
+  void work() final {
+    if (this->hasError()) return;
+    roaring64_bitmap_t * r = roaring64_bitmap_create();
+    if (r == nullptr) {
+      return this->setError(WorkerError("RoaringBitmap64.fromArrayAsync: create failed"));
+    }
+    if (this->valuesLen > 0 && this->values != nullptr) {
+      roaring64_bitmap_add_many(r, this->valuesLen, this->values);
+      roaring64_bitmap_run_optimize(r);
+      roaring64_bitmap_shrink_to_fit(r);
+    }
+    this->resultBitmap.store(r, std::memory_order_release);
+  }
+
+  void done(v8::Local<v8::Value> & out) final {
+    v8::Isolate * iso = this->isolate;
+    AddonData * ad = this->maybeAddonData;
+    if (ad == nullptr) {
+      return this->setError(WorkerError("Addon data unavailable"));
+    }
+    v8::Local<v8::Function> cons = ad->RoaringBitmap64_constructor.Get(iso);
+    v8::Local<v8::Object> newObj;
+    v8::Local<v8::Value> argv[1] = {v8::Undefined(iso)};
+    if (!cons->NewInstance(iso->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+      return this->setError(WorkerError("Failed to instantiate RoaringBitmap64"));
+    }
+    RoaringBitmap64 * inst = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, iso);
+    if (inst == nullptr) {
+      return this->setError(WorkerError(ERROR_INVALID_OBJECT));
+    }
+    roaring64_bitmap_t * r = this->resultBitmap.exchange(nullptr, std::memory_order_acq_rel);
+    if (r == nullptr) {
+      out = newObj;
+      return;
     }
     if (inst->bitmap) roaring64_bitmap_free(inst->bitmap);
     inst->bitmap = r;

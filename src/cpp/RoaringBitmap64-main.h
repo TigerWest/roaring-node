@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "RoaringBitmap64.h"
+#include "RoaringBitmap64-async-workers.h"
 #include "RoaringBitmap64-bulk.h"
 #include "RoaringBitmap64-ops.h"
 #include "RoaringBitmap64-ranges.h"
@@ -595,6 +596,76 @@ inline void RoaringBitmap64_swapStatic(const v8::FunctionCallbackInfo<v8::Value>
   b->invalidate();
 }
 
+inline void RoaringBitmap64_fromArrayStaticAsync(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+
+  v8::Local<v8::Value> firstArg;
+  if (info.Length() >= 1) firstArg = info[0];
+
+  if (
+    !firstArg.IsEmpty() && !firstArg->IsNullOrUndefined() &&
+    !firstArg->IsFunction() && firstArg->IsObject() &&
+    addonData->RoaringBitmap64_constructorTemplate.Get(isolate)->HasInstance(firstArg)) {
+    return v8utils::throwTypeError(
+      isolate,
+      "RoaringBitmap64.fromArrayAsync cannot be called with a RoaringBitmap64 instance; use .clone() instead");
+  }
+
+  auto * worker = new RB64FromArrayAsyncWorker(isolate, addonData);
+  if (worker == nullptr) {
+    return v8utils::throwError(isolate, "Failed to allocate async worker");
+  }
+
+  if (info.Length() >= 2 && info[1]->IsFunction()) {
+    worker->setCallback(info[1]);
+  } else if (info.Length() >= 1 && info[0]->IsFunction()) {
+    worker->setCallback(info[0]);
+  }
+
+  // Extract values synchronously on the main thread (V8 BigInt access is
+  // main-thread only). drainIterable throws V8 exceptions on bad elements;
+  // we catch them here and return a rejected Promise (or invoke the
+  // callback with the error) to match the documented async contract.
+  if (!firstArg.IsEmpty() && !firstArg->IsNullOrUndefined() && !firstArg->IsFunction()) {
+    v8::TryCatch tryCatch(isolate);
+    bool ok = worker->extractValues(firstArg);
+    if (!ok && tryCatch.HasCaught()) {
+      v8::Local<v8::Value> exc = tryCatch.Exception();
+      tryCatch.Reset();
+      auto context = isolate->GetCurrentContext();
+      v8::MaybeLocal<v8::Promise::Resolver> resolverMaybe = v8::Promise::Resolver::New(context);
+      delete worker;
+      if (resolverMaybe.IsEmpty()) {
+        isolate->ThrowException(exc);
+        return;
+      }
+      v8::Local<v8::Promise::Resolver> resolver = resolverMaybe.ToLocalChecked();
+      // If a callback was provided, invoke it node-style; else reject the Promise.
+      // We have already consumed the callback into the worker, but the worker
+      // is being deleted — so re-read from info.
+      v8::Local<v8::Function> cb;
+      if (info.Length() >= 2 && info[1]->IsFunction()) {
+        cb = info[1].As<v8::Function>();
+      } else if (info.Length() >= 1 && info[0]->IsFunction()) {
+        cb = info[0].As<v8::Function>();
+      }
+      if (!cb.IsEmpty()) {
+        v8::Local<v8::Value> argv[] = {exc, v8::Undefined(isolate)};
+        ignoreMaybeResult(cb->Call(context, context->Global(), 2, argv));
+        return;
+      }
+      ignoreMaybeResult(resolver->Reject(context, exc));
+      info.GetReturnValue().Set(resolver->GetPromise());
+      return;
+    }
+  }
+
+  v8::Local<v8::Value> returnValue = AsyncWorker::run(worker);
+  info.GetReturnValue().Set(returnValue);
+}
+
 // ---- Init ----
 
 inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addonData) {
@@ -763,6 +834,7 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   addonData->setMethod(ctorObject, "fromRange", RoaringBitmap64_fromRangeStatic);
   addonData->setMethod(ctorObject, "addOffset", RoaringBitmap64_addOffsetStatic);
   addonData->setMethod(ctorObject, "swap", RoaringBitmap64_swapStatic);
+  addonData->setMethod(ctorObject, "fromArrayAsync", RoaringBitmap64_fromArrayStaticAsync);
 
   // Static deserialize
   addonData->setMethod(ctorObject, "deserialize", RoaringBitmap64_deserializeStatic);
