@@ -2804,6 +2804,53 @@ export class RoaringBitmap64 {
    */
   isDisjointFrom(other: ReadonlySetLike<bigint> | RoaringBitmap64): boolean;
 
+  /**
+   * Returns a new RoaringBitmap64 containing every value in this bitmap or
+   * in `other` (set union). Operands are not modified.
+   */
+  union(other: RoaringBitmap64): RoaringBitmap64;
+  /**
+   * Set protocol fallback: returns a new `Set<bigint>` of every value in
+   * this bitmap or in `other`. Slow for big bitmaps — prefer the
+   * RoaringBitmap64 overload when possible.
+   */
+  union(other: ReadonlySetLike<bigint>): Set<bigint>;
+
+  /**
+   * Returns a new RoaringBitmap64 containing every value present in both
+   * this bitmap and `other` (set intersection). Operands are not modified.
+   */
+  intersection(other: RoaringBitmap64): RoaringBitmap64;
+  /**
+   * Set protocol fallback: returns a new `Set<bigint>` of every value
+   * present in both this bitmap and `other`.
+   */
+  intersection(other: ReadonlySetLike<bigint>): Set<bigint>;
+
+  /**
+   * Returns a new RoaringBitmap64 containing every value in this bitmap
+   * that is not in `other` (set difference / and-not). Operands are not
+   * modified.
+   */
+  difference(other: RoaringBitmap64): RoaringBitmap64;
+  /**
+   * Set protocol fallback: returns a new `Set<bigint>` of every value in
+   * this bitmap that is not in `other`.
+   */
+  difference(other: ReadonlySetLike<bigint>): Set<bigint>;
+
+  /**
+   * Returns a new RoaringBitmap64 containing every value present in
+   * exactly one of this bitmap and `other` (symmetric difference / xor).
+   * Operands are not modified.
+   */
+  symmetricDifference(other: RoaringBitmap64): RoaringBitmap64;
+  /**
+   * Set protocol fallback: returns a new `Set<bigint>` of every value
+   * present in exactly one of this bitmap and `other`.
+   */
+  symmetricDifference(other: ReadonlySetLike<bigint>): Set<bigint>;
+
   andInPlace(other: RoaringBitmap64): this;
   orInPlace(other: RoaringBitmap64): this;
   xorInPlace(other: RoaringBitmap64): this;

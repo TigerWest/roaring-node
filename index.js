@@ -1031,6 +1031,84 @@ if (!roaring[initializedSym]) {
     return true;
   };
 
+  roaringBitmap64_proto.union = function union(other) {
+    if (other instanceof RoaringBitmap64) {
+      return RoaringBitmap64.or(this, other);
+    }
+    const set = this.toSet();
+    if (other) {
+      for (const v of other.keys()) {
+        set.add(v);
+      }
+    }
+    return set;
+  };
+
+  roaringBitmap64_proto.intersection = function intersection(other) {
+    if (other instanceof RoaringBitmap64) {
+      return RoaringBitmap64.and(this, other);
+    }
+    // RB64.size is bigint, Set.size is number — coerce so the smaller-side
+    // pivot comparison is BigInt-on-BigInt.
+    const otherSize = typeof other.size === "bigint" ? other.size : BigInt(other.size);
+    let smaller;
+    let larger;
+    if (this.size <= otherSize) {
+      smaller = this;
+      larger = other;
+    } else {
+      smaller = other.keys();
+      larger = this;
+    }
+    const result = new Set();
+    for (const elem of smaller) {
+      if (larger.has(elem)) {
+        result.add(elem);
+      }
+    }
+    return result;
+  };
+
+  roaringBitmap64_proto.difference = function difference(other) {
+    if (other instanceof RoaringBitmap64) {
+      return RoaringBitmap64.andNot(this, other);
+    }
+    // RB64.size is bigint, Set.size is number — coerce.
+    const otherSize = typeof other.size === "bigint" ? other.size : BigInt(other.size);
+    if (this.size <= otherSize) {
+      const result = this.toSet();
+      for (const elem of this) {
+        if (other.has(elem)) {
+          result.delete(elem);
+        }
+      }
+      return result;
+    }
+
+    const result = new Set();
+    for (const v of this) {
+      if (!other.has(v)) {
+        result.add(v);
+      }
+    }
+    return result;
+  };
+
+  roaringBitmap64_proto.symmetricDifference = function symmetricDifference(other) {
+    if (other instanceof RoaringBitmap64) {
+      return RoaringBitmap64.xor(this, other);
+    }
+    const result = this.toSet();
+    for (const elem of other.keys()) {
+      if (this.has(elem)) {
+        result.delete(elem);
+      } else {
+        result.add(elem);
+      }
+    }
+    return result;
+  };
+
   defineValue(
     "SerializationFormat",
     {
