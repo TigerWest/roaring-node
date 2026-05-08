@@ -16818,53 +16818,35 @@ inline bool unwrapMany(
 
 }  // namespace RoaringBitmap64_static_internal
 
-inline void RoaringBitmap64_orManyStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
-  v8::Isolate * isolate = info.GetIsolate();
-  AddonData * addonData = AddonData::get(info);
-  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
-  if (info.Length() < 1) {
-    return v8utils::throwTypeError(isolate, "RoaringBitmap64.orMany expects an array argument");
+#define ROARINGBITMAP64_STATIC_MANY(NAME, INPLACE_FN, METHODNAME)                                       \
+  inline void RoaringBitmap64_##NAME##ManyStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {    \
+    v8::Isolate * isolate = info.GetIsolate();                                                          \
+    AddonData * addonData = AddonData::get(info);                                                       \
+    if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);                \
+    if (info.Length() < 1) {                                                                            \
+      return v8utils::throwTypeError(isolate, METHODNAME " expects an array argument");                 \
+    }                                                                                                   \
+    std::vector<const RoaringBitmap64 *> items;                                                         \
+    if (!RoaringBitmap64_static_internal::unwrapMany(isolate, info[0], METHODNAME, items)) return;      \
+    roaring64_bitmap_t * result = nullptr;                                                              \
+    if (items.empty()) {                                                                                \
+      result = roaring64_bitmap_create();                                                               \
+    } else {                                                                                            \
+      result = roaring64_bitmap_copy(items[0]->bitmap);                                                 \
+      if (result != nullptr) {                                                                          \
+        for (size_t i = 1; i < items.size(); ++i) {                                                     \
+          INPLACE_FN(result, items[i]->bitmap);                                                         \
+        }                                                                                               \
+      }                                                                                                 \
+    }                                                                                                   \
+    RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);                 \
   }
-  std::vector<const RoaringBitmap64 *> items;
-  if (!RoaringBitmap64_static_internal::unwrapMany(isolate, info[0], "RoaringBitmap64.orMany", items)) return;
 
-  roaring64_bitmap_t * result = nullptr;
-  if (items.empty()) {
-    result = roaring64_bitmap_create();
-  } else {
-    result = roaring64_bitmap_copy(items[0]->bitmap);
-    if (result != nullptr) {
-      for (size_t i = 1; i < items.size(); ++i) {
-        roaring64_bitmap_or_inplace(result, items[i]->bitmap);
-      }
-    }
-  }
-  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
-}
+ROARINGBITMAP64_STATIC_MANY(or, roaring64_bitmap_or_inplace, "RoaringBitmap64.orMany")
+ROARINGBITMAP64_STATIC_MANY(and, roaring64_bitmap_and_inplace, "RoaringBitmap64.andMany")
+ROARINGBITMAP64_STATIC_MANY(xor, roaring64_bitmap_xor_inplace, "RoaringBitmap64.xorMany")
 
-inline void RoaringBitmap64_andManyStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
-  v8::Isolate * isolate = info.GetIsolate();
-  AddonData * addonData = AddonData::get(info);
-  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
-  if (info.Length() < 1) {
-    return v8utils::throwTypeError(isolate, "RoaringBitmap64.andMany expects an array argument");
-  }
-  std::vector<const RoaringBitmap64 *> items;
-  if (!RoaringBitmap64_static_internal::unwrapMany(isolate, info[0], "RoaringBitmap64.andMany", items)) return;
-
-  roaring64_bitmap_t * result = nullptr;
-  if (items.empty()) {
-    result = roaring64_bitmap_create();
-  } else {
-    result = roaring64_bitmap_copy(items[0]->bitmap);
-    if (result != nullptr) {
-      for (size_t i = 1; i < items.size(); ++i) {
-        roaring64_bitmap_and_inplace(result, items[i]->bitmap);
-      }
-    }
-  }
-  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
-}
+#undef ROARINGBITMAP64_STATIC_MANY
 
 inline void RoaringBitmap64_fromRoaring32Static(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
@@ -18461,6 +18443,7 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   addonData->setMethod(ctorObject, "jaccardIndex", RoaringBitmap64_jaccardIndexStatic);
   addonData->setMethod(ctorObject, "orMany", RoaringBitmap64_orManyStatic);
   addonData->setMethod(ctorObject, "andMany", RoaringBitmap64_andManyStatic);
+  addonData->setMethod(ctorObject, "xorMany", RoaringBitmap64_xorManyStatic);
   addonData->setMethod(ctorObject, "fromRoaring32", RoaringBitmap64_fromRoaring32Static);
 
   // Static deserialize

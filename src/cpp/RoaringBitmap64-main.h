@@ -678,6 +678,7 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   addonData->setMethod(ctorObject, "jaccardIndex", RoaringBitmap64_jaccardIndexStatic);
   addonData->setMethod(ctorObject, "orMany", RoaringBitmap64_orManyStatic);
   addonData->setMethod(ctorObject, "andMany", RoaringBitmap64_andManyStatic);
+  addonData->setMethod(ctorObject, "xorMany", RoaringBitmap64_xorManyStatic);
   addonData->setMethod(ctorObject, "fromRoaring32", RoaringBitmap64_fromRoaring32Static);
 
   // Static deserialize

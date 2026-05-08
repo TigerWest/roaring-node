@@ -3090,6 +3090,17 @@ export class RoaringBitmap64 {
   static andMany(values: ReadonlyArray<RoaringBitmap64>): RoaringBitmap64;
 
   /**
+   * Returns the symmetric difference (xor) of every bitmap in `values` as
+   * a new RoaringBitmap64 — a value is present iff it appears in an odd
+   * number of input bitmaps. Empty array returns an empty bitmap. A
+   * single-element array returns a clone (not an alias).
+   *
+   * Faster than calling `xor` repeatedly because the fold accumulator is
+   * mutated in place.
+   */
+  static xorMany(values: ReadonlyArray<RoaringBitmap64>): RoaringBitmap64;
+
+  /**
    * Returns a new RoaringBitmap64 containing every value of the supplied
    * RoaringBitmap32 (32-bit values widened to BigInt). The source bitmap is
    * not modified.
