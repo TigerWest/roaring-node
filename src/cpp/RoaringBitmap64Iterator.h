@@ -12,11 +12,16 @@ class RoaringBitmap64Iterator final : public ObjectWrap {
   v8::Global<v8::Object> bitmapPersistent;
   v8::Global<v8::Object> persistent;
   bool exhausted;
+  // Mismatch with parent->_version means the underlying CRoaring iter is invalid.
+  int64_t versionAtCreate;
 
   explicit RoaringBitmap64Iterator(AddonData * addonData) :
-    ObjectWrap(addonData), iter(nullptr), exhausted(true) {}
+    ObjectWrap(addonData), iter(nullptr), exhausted(true), versionAtCreate(0) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RoaringBitmap64Iterator));
+  }
 
   ~RoaringBitmap64Iterator() {
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RoaringBitmap64Iterator));
     if (this->iter) {
       roaring64_iterator_free(this->iter);
       this->iter = nullptr;
@@ -61,7 +66,13 @@ inline void RoaringBitmap64Iterator_New(const v8::FunctionCallbackInfo<v8::Value
   }
   auto * instance = new (mem) RoaringBitmap64Iterator(addonData);
   instance->iter = roaring64_iterator_create(parent->bitmap);
+  if (instance->iter == nullptr) {
+    instance->~RoaringBitmap64Iterator();
+    bare_aligned_free(instance);
+    return v8utils::throwError(isolate, "RoaringBitmap64Iterator: failed to create iterator");
+  }
   instance->exhausted = !roaring64_iterator_has_value(instance->iter);
+  instance->versionAtCreate = parent->getVersion();
 
   int indices[2] = {0, 1};
   void * values[2] = {instance, (void *)(RoaringBitmap64Iterator::OBJECT_TOKEN)};
@@ -85,6 +96,11 @@ inline void RoaringBitmap64Iterator_next(const v8::FunctionCallbackInfo<v8::Valu
     RoaringBitmap64 * parent = ObjectWrap::TryUnwrap<RoaringBitmap64>(parentObj, isolate);
     if (parent == nullptr || parent->disposed) {
       return v8utils::throwError(isolate, "RoaringBitmap64Iterator: parent is disposed");
+    }
+    // Mutating the parent bitmap invalidates the underlying CRoaring iterator.
+    // Continuing to use it would be undefined behavior — throw instead.
+    if (parent->getVersion() != self->versionAtCreate) {
+      return v8utils::throwError(isolate, "RoaringBitmap64Iterator: parent bitmap was mutated during iteration");
     }
   }
 

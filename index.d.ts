@@ -2660,6 +2660,45 @@ export type RoaringBitmap32Callback = (error: Error | null, bitmap: RoaringBitma
 export type RoaringBitmap32ArrayCallback = (error: Error | null, bitmap: RoaringBitmap32[] | undefined) => void;
 
 /**
+ * Layout/density statistics for a {@link RoaringBitmap64}.
+ *
+ * All count and byte fields are typed as `number` (IEEE-754 double) for
+ * ergonomic use with arithmetic. They are exact up to 2^53. In practice every
+ * field stays well below that limit, but for theoretical bitmaps whose
+ * cardinality exceeds 2^53 the `valuesIn*Containers` fields can lose
+ * precision; in that case use `size` (a `bigint`) as the source of truth and
+ * sum container values from `containers`/`arrayContainers`/etc. counts only.
+ */
+export interface RoaringBitmap64Statistics {
+  /** Number of containers. */
+  containers: number;
+  /** Number of array containers. */
+  arrayContainers: number;
+  /** Number of run containers. */
+  runContainers: number;
+  /** Number of bitmap (bitset) containers. */
+  bitsetContainers: number;
+  /** Number of values stored in array containers. */
+  valuesInArrayContainers: number;
+  /** Number of values stored in run containers. */
+  valuesInRunContainers: number;
+  /** Number of values stored in bitset containers. */
+  valuesInBitsetContainers: number;
+  /** Bytes allocated for array containers. */
+  bytesInArrayContainers: number;
+  /** Bytes allocated for run containers. */
+  bytesInRunContainers: number;
+  /** Bytes allocated for bitset containers. */
+  bytesInBitsetContainers: number;
+  /** Maximum value, or undefined when the bitmap is empty. */
+  maxValue: bigint | undefined;
+  /** Minimum value, or undefined when the bitmap is empty. */
+  minValue: bigint | undefined;
+  /** Total number of values stored in the bitmap. */
+  size: bigint;
+}
+
+/**
  * Roaring bitmap supporting unsigned 64-bit integers, exposed via BigInt.
  *
  * Mirrors the structure of RoaringBitmap32 but operates on the full uint64
@@ -2667,15 +2706,29 @@ export type RoaringBitmap32ArrayCallback = (error: Error | null, bitmap: Roaring
  * no cross-type set operations or conversions in this MVP.
  */
 export class RoaringBitmap64 {
+  /**
+   * Creates a RoaringBitmap64. If values are provided, they are added via
+   * addMany. Passing another RoaringBitmap64 instance is rejected with a
+   * TypeError; use `.clone()` instead.
+   */
   constructor(values?: BigUint64Array | Iterable<bigint>);
 
   readonly size: bigint;
   readonly isEmpty: boolean;
   readonly isDisposed: boolean;
 
+  /**
+   * Adds the value. Throws TypeError if the value is not a BigInt or
+   * RangeError if the value is negative or >= 2^64.
+   */
   add(value: bigint): this;
+  /**
+   * Adds the value if not already present. Returns true if newly inserted,
+   * false if it was already in the set.
+   */
   tryAdd(value: bigint): boolean;
   remove(value: bigint): this;
+  /** Removes the value, returning true if it was present. */
   delete(value: bigint): boolean;
   has(value: bigint): boolean;
   contains(value: bigint): boolean;
@@ -2705,6 +2758,54 @@ export class RoaringBitmap64 {
   deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): this;
   getSerializationSizeInBytes(): bigint;
 
+  /**
+   * Adds every value in `[rangeStart, rangeEnd)` (half-open). Returns this.
+   * No-op when rangeStart >= rangeEnd. Throws TypeError on non-BigInt input
+   * and RangeError on values outside `[0, 2^64)`.
+   *
+   * Because `rangeEnd` is half-open and must fit in a uint64, the maximum
+   * representable value `2n ** 64n - 1n` cannot be added via `addRange`
+   * (it would require `rangeEnd === 2n ** 64n`, which throws RangeError).
+   * Use `add(2n ** 64n - 1n)` for that single value.
+   */
+  addRange(rangeStart: bigint, rangeEnd: bigint): this;
+
+  /**
+   * Removes every value in `[rangeStart, rangeEnd)` (half-open). Returns this.
+   * No-op when rangeStart >= rangeEnd or when the range is outside the bitmap.
+   */
+  removeRange(rangeStart: bigint, rangeEnd: bigint): this;
+
+  /**
+   * Cardinality of the bitmap restricted to `[rangeStart, rangeEnd)`.
+   * Returns 0n when rangeStart >= rangeEnd.
+   */
+  rangeCardinality(rangeStart: bigint, rangeEnd: bigint): bigint;
+
+  /**
+   * Tries to convert array/bitset containers to run containers when that
+   * shrinks memory. Returns true if at least one container changed.
+   */
+  runOptimize(): boolean;
+
+  /**
+   * Returns layout/density statistics for the bitmap. Container/byte counts
+   * are returned as numbers (cannot exceed 2^53 in practice). Cardinality and
+   * min/max values are BigInt; min/max are undefined for empty bitmaps.
+   */
+  statistics(): RoaringBitmap64Statistics;
+
+  /**
+   * Throws if the bitmap fails internal consistency checks (the error message
+   * comes from CRoaring). Returns void on success. Intended use: after
+   * `deserialize()` from an untrusted source.
+   *
+   * Note: RB64 throws on failure; RB32's `internalValidate` returns the
+   * reason string instead. This intentional divergence simplifies the
+   * PostgreSQL `bytea` ingestion path.
+   */
+  internalValidate(): void;
+
   dispose(): void;
 
   [Symbol.iterator](): RoaringBitmap64Iterator;
@@ -2720,6 +2821,26 @@ export class RoaringBitmap64 {
   static andNotCardinality(a: RoaringBitmap64, b: RoaringBitmap64): bigint;
 
   static jaccardIndex(a: RoaringBitmap64, b: RoaringBitmap64): number;
+
+  /**
+   * Returns the union of every bitmap in `values` as a new RoaringBitmap64.
+   * Empty array returns an empty bitmap. A single-element array returns a
+   * clone (not an alias).
+   */
+  static orMany(values: ReadonlyArray<RoaringBitmap64>): RoaringBitmap64;
+
+  /**
+   * Returns the intersection of every bitmap in `values` as a new
+   * RoaringBitmap64. Empty array returns an empty bitmap.
+   */
+  static andMany(values: ReadonlyArray<RoaringBitmap64>): RoaringBitmap64;
+
+  /**
+   * Returns a new RoaringBitmap64 containing every value of the supplied
+   * RoaringBitmap32 (32-bit values widened to BigInt). The source bitmap is
+   * not modified.
+   */
+  static fromRoaring32(value: RoaringBitmap32): RoaringBitmap64;
 
   static deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): RoaringBitmap64;
   static getDeserializationSize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): bigint;

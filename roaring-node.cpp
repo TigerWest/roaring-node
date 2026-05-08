@@ -16140,6 +16140,8 @@ class RoaringBitmap64 final : public ObjectWrap {
 #ifndef ROARING_NODE_ROARINGBITMAP64_BULK_H_
 #define ROARING_NODE_ROARINGBITMAP64_BULK_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #line 1 "src/cpp/bigint-utils.h"
@@ -16236,7 +16238,7 @@ inline bool tryGetBigUint64Array(
 
 #endif  // ROARING_NODE_BIGINT_UTILS_H_
 
-#line 8 "src/cpp/RoaringBitmap64-bulk.h"
+#line 10 "src/cpp/RoaringBitmap64-bulk.h"
 
 namespace RoaringBitmap64_bulk_internal {
 
@@ -16277,20 +16279,49 @@ inline bool drainIterable(
     return false;
   }
   v8::Local<v8::Value> iterVal;
-  if (!iterFnVal.As<v8::Function>()->Call(context, obj, 0, nullptr).ToLocal(&iterVal) || !iterVal->IsObject()) {
+  if (!iterFnVal.As<v8::Function>()->Call(context, obj, 0, nullptr).ToLocal(&iterVal)) {
+    // Underlying call already threw — propagate.
+    return false;
+  }
+  if (!iterVal->IsObject()) {
+    auto msg = std::string(paramName) + ": iterator factory must return an object";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
     return false;
   }
   auto iter = iterVal.As<v8::Object>();
   auto nextKey = v8::String::NewFromUtf8Literal(isolate, "next", v8::NewStringType::kInternalized);
   v8::Local<v8::Value> nextFnVal;
-  if (!iter->Get(context, nextKey).ToLocal(&nextFnVal) || !nextFnVal->IsFunction()) return false;
+  if (!iter->Get(context, nextKey).ToLocal(&nextFnVal)) return false;
+  if (!nextFnVal->IsFunction()) {
+    auto msg = std::string(paramName) + ": iterator must have a next() method";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
   auto nextFn = nextFnVal.As<v8::Function>();
   auto valueKey = v8::String::NewFromUtf8Literal(isolate, "value", v8::NewStringType::kInternalized);
   auto doneKey = v8::String::NewFromUtf8Literal(isolate, "done", v8::NewStringType::kInternalized);
 
+  // DoS guard: a hostile iterator that never returns done would loop forever.
+  const uint64_t kMaxIterations = (uint64_t)1 << 32;
+  uint64_t iterationCount = 0;
+
   while (true) {
+    if (++iterationCount > kMaxIterations) {
+      auto msg = std::string(paramName) + ": iterator exceeded maximum length";
+      isolate->ThrowException(v8::Exception::RangeError(
+        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      return false;
+    }
     v8::Local<v8::Value> stepVal;
-    if (!nextFn->Call(context, iter, 0, nullptr).ToLocal(&stepVal) || !stepVal->IsObject()) return false;
+    if (!nextFn->Call(context, iter, 0, nullptr).ToLocal(&stepVal)) return false;
+    if (!stepVal->IsObject()) {
+      auto msg = std::string(paramName) + ": iterator next() must return an object";
+      isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      return false;
+    }
     auto step = stepVal.As<v8::Object>();
     v8::Local<v8::Value> doneVal;
     if (!step->Get(context, doneKey).ToLocal(&doneVal)) return false;
@@ -16316,6 +16347,9 @@ inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & 
   size_t n = 0;
   if (roaring_node_bigint::tryGetBigUint64Array(info[0], &data, &n)) {
     if (n > 0) {
+      if (data == nullptr) {
+        return v8utils::throwError(isolate, "RoaringBitmap64.addMany: BigUint64Array backing store is null (detached?)");
+      }
       roaring64_bitmap_add_many(self->bitmap, n, data);
       self->invalidate();
     }
@@ -16342,6 +16376,9 @@ inline void RoaringBitmap64_removeMany(const v8::FunctionCallbackInfo<v8::Value>
   size_t n = 0;
   if (roaring_node_bigint::tryGetBigUint64Array(info[0], &data, &n)) {
     if (n > 0) {
+      if (data == nullptr) {
+        return v8utils::throwError(isolate, "RoaringBitmap64.removeMany: BigUint64Array backing store is null (detached?)");
+      }
       roaring64_bitmap_remove_many(self->bitmap, n, data);
       self->invalidate();
     }
@@ -16363,10 +16400,22 @@ inline void RoaringBitmap64_toUint64Array(const v8::FunctionCallbackInfo<v8::Val
   const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
   if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
   uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
+  if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds size_t limit");
+  }
+  if (card > (uint64_t)0xFFFFFFFFu) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: cardinality exceeds TypedArray length limit");
+  }
   size_t byteLen = (size_t)card * sizeof(uint64_t);
   auto ab = v8::ArrayBuffer::New(isolate, byteLen);
+  if (ab.IsEmpty()) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: ArrayBuffer allocation failed");
+  }
   if (card > 0) {
     uint64_t * dst = reinterpret_cast<uint64_t *>(ab->GetBackingStore()->Data());
+    if (dst == nullptr) {
+      return v8utils::throwError(isolate, "RoaringBitmap64.toUint64Array: ArrayBuffer backing store is null");
+    }
     roaring64_bitmap_to_uint64_array(self->bitmap, dst);
   }
   auto ta = v8::BigUint64Array::New(ab, 0, (size_t)card);
@@ -16448,11 +16497,94 @@ ROARINGBITMAP64_INPLACE(andNotInPlace, roaring64_bitmap_andnot_inplace, "Roaring
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_OPS_H_
 
+#line 1 "src/cpp/RoaringBitmap64-ranges.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_RANGES_H_
+#define ROARING_NODE_ROARINGBITMAP64_RANGES_H_
+
+#line 6 "src/cpp/RoaringBitmap64-ranges.h"
+
+namespace RoaringBitmap64_ranges_internal {
+
+// Reads (start, end) half-open BigInt args. On error throws and returns false.
+// On success: writes *outStart, *outEnd. If start >= end, sets *outEmpty = true
+// and the caller should treat the call as a no-op.
+inline bool readHalfOpenRange(
+  v8::Isolate * isolate,
+  const v8::FunctionCallbackInfo<v8::Value> & info,
+  uint64_t * outStart,
+  uint64_t * outEnd,
+  bool * outEmpty) {
+  if (info.Length() < 2) {
+    v8utils::throwError(isolate, "RoaringBitmap64 range op expects (start, end)");
+    return false;
+  }
+  uint64_t s, e;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &s, "rangeStart")) return false;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[1], &e, "rangeEnd")) return false;
+  *outStart = s;
+  *outEnd = e;
+  *outEmpty = (s >= e);
+  return true;
+}
+
+}  // namespace RoaringBitmap64_ranges_internal
+
+inline void RoaringBitmap64_addRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  if (!empty) {
+    // Use _closed with e-1 to honour the [s, e) contract. Safe because
+    // empty==false implies e > s, so e >= 1 and e-1 cannot underflow.
+    roaring64_bitmap_add_range_closed(self->bitmap, s, e - 1);
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_removeRange(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  if (!empty) {
+    roaring64_bitmap_remove_range_closed(self->bitmap, s, e - 1);
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_rangeCardinality(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  uint64_t s, e;
+  bool empty;
+  if (!RoaringBitmap64_ranges_internal::readHalfOpenRange(isolate, info, &s, &e, &empty)) return;
+  uint64_t card = empty ? 0 : roaring64_bitmap_range_closed_cardinality(self->bitmap, s, e - 1);
+  info.GetReturnValue().Set(roaring_node_bigint::makeUint64BigInt(isolate, card));
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_RANGES_H_
+
 #line 1 "src/cpp/RoaringBitmap64-static-ops.h"
 #ifndef ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
 #define ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
 
-#line 6 "src/cpp/RoaringBitmap64-static-ops.h"
+#include <vector>
+
+#line 9 "src/cpp/RoaringBitmap64-static-ops.h"
 
 namespace RoaringBitmap64_static_internal {
 inline bool unwrapPair(
@@ -16478,16 +16610,21 @@ inline bool unwrapPair(
 inline void returnNewBitmap(
   v8::Isolate * isolate, AddonData * addonData,
   const v8::FunctionCallbackInfo<v8::Value> & info, roaring64_bitmap_t * raw) {
+  if (raw == nullptr) {
+    v8utils::throwError(isolate, "RoaringBitmap64 set operation: allocation failed");
+    return;
+  }
   auto cons = addonData->RoaringBitmap64_constructor.Get(isolate);
   v8::Local<v8::Object> newObj;
   v8::Local<v8::Value> argv[1] = {v8::Undefined(isolate)};
   if (!cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
-    if (raw) roaring64_bitmap_free(raw);
+    roaring64_bitmap_free(raw);
     return;
   }
   RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, isolate);
   if (other == nullptr) {
-    if (raw) roaring64_bitmap_free(raw);
+    roaring64_bitmap_free(raw);
+    v8utils::throwError(isolate, "RoaringBitmap64 set operation: failed to unwrap result");
     return;
   }
   if (other->bitmap) roaring64_bitmap_free(other->bitmap);
@@ -16540,6 +16677,137 @@ inline void RoaringBitmap64_jaccardIndexStatic(const v8::FunctionCallbackInfo<v8
   if (!RoaringBitmap64_static_internal::unwrapPair(isolate, info, "RoaringBitmap64.jaccardIndex", &a, &b)) return;
   double r = roaring64_bitmap_jaccard_index(a->bitmap, b->bitmap);
   info.GetReturnValue().Set(r);
+}
+
+namespace RoaringBitmap64_static_internal {
+
+// Validate the input array of RoaringBitmap64 instances. On success appends
+// borrowed pointers to `out` and returns true (out.size() == 0 is a legal
+// "empty input" result). On error throws and returns false; out is unspecified.
+inline bool unwrapMany(
+  v8::Isolate * isolate,
+  v8::Local<v8::Value> arg,
+  const char * methodName,
+  std::vector<const RoaringBitmap64 *> & out) {
+  if (!arg->IsArray()) {
+    auto msg = std::string(methodName) + " expects an array of RoaringBitmap64";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  v8::Local<v8::Array> arr = arg.As<v8::Array>();
+  uint32_t len = arr->Length();
+  out.clear();
+  out.reserve(len);
+  for (uint32_t i = 0; i < len; ++i) {
+    v8::Local<v8::Value> el;
+    if (!arr->Get(context, i).ToLocal(&el)) return false;
+    const RoaringBitmap64 * b = ObjectWrap::TryUnwrap<const RoaringBitmap64>(el, isolate);
+    if (b == nullptr) {
+      auto msg = std::string(methodName) + ": element at index " + std::to_string(i) +
+                 " is not a RoaringBitmap64";
+      isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+      return false;
+    }
+    if (b->disposed) {
+      auto msg = std::string(methodName) + ": element at index " + std::to_string(i) +
+                 " is a disposed RoaringBitmap64";
+      v8utils::throwError(isolate, msg.c_str());
+      return false;
+    }
+    out.push_back(b);
+  }
+  return true;
+}
+
+}  // namespace RoaringBitmap64_static_internal
+
+inline void RoaringBitmap64_orManyStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1) {
+    return v8utils::throwTypeError(isolate, "RoaringBitmap64.orMany expects an array argument");
+  }
+  std::vector<const RoaringBitmap64 *> items;
+  if (!RoaringBitmap64_static_internal::unwrapMany(isolate, info[0], "RoaringBitmap64.orMany", items)) return;
+
+  roaring64_bitmap_t * result = nullptr;
+  if (items.empty()) {
+    result = roaring64_bitmap_create();
+  } else {
+    result = roaring64_bitmap_copy(items[0]->bitmap);
+    if (result != nullptr) {
+      for (size_t i = 1; i < items.size(); ++i) {
+        roaring64_bitmap_or_inplace(result, items[i]->bitmap);
+      }
+    }
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
+}
+
+inline void RoaringBitmap64_andManyStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1) {
+    return v8utils::throwTypeError(isolate, "RoaringBitmap64.andMany expects an array argument");
+  }
+  std::vector<const RoaringBitmap64 *> items;
+  if (!RoaringBitmap64_static_internal::unwrapMany(isolate, info[0], "RoaringBitmap64.andMany", items)) return;
+
+  roaring64_bitmap_t * result = nullptr;
+  if (items.empty()) {
+    result = roaring64_bitmap_create();
+  } else {
+    result = roaring64_bitmap_copy(items[0]->bitmap);
+    if (result != nullptr) {
+      for (size_t i = 1; i < items.size(); ++i) {
+        roaring64_bitmap_and_inplace(result, items[i]->bitmap);
+      }
+    }
+  }
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
+}
+
+inline void RoaringBitmap64_fromRoaring32Static(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1) {
+    return v8utils::throwTypeError(
+      isolate, "RoaringBitmap64.fromRoaring32 expects a RoaringBitmap32 argument");
+  }
+  const RoaringBitmap32 * src = ObjectWrap::TryUnwrap<const RoaringBitmap32>(info[0], isolate);
+  if (src == nullptr || src->roaring == nullptr) {
+    return v8utils::throwTypeError(
+      isolate, "RoaringBitmap64.fromRoaring32 argument must be a non-disposed RoaringBitmap32");
+  }
+
+  roaring64_bitmap_t * result = roaring64_bitmap_create();
+  if (result == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.fromRoaring32: allocation failed");
+  }
+
+  uint64_t card = roaring_bitmap_get_cardinality(src->roaring);
+  if (card > 0) {
+    // Chunked conversion: keeps peak memory bounded for very large RB32s.
+    constexpr uint32_t CHUNK = 4096;
+    uint32_t buf32[CHUNK];
+    uint64_t buf64[CHUNK];
+    roaring_uint32_iterator_t it;
+    roaring_iterator_init(src->roaring, &it);
+    while (it.has_value) {
+      uint32_t produced = roaring_uint32_iterator_read(&it, buf32, CHUNK);
+      if (produced == 0) break;
+      for (uint32_t i = 0; i < produced; ++i) buf64[i] = static_cast<uint64_t>(buf32[i]);
+      roaring64_bitmap_add_many(result, produced, buf64);
+    }
+  }
+
+  RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, result);
 }
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
@@ -16665,11 +16933,16 @@ class RoaringBitmap64Iterator final : public ObjectWrap {
   v8::Global<v8::Object> bitmapPersistent;
   v8::Global<v8::Object> persistent;
   bool exhausted;
+  // Mismatch with parent->_version means the underlying CRoaring iter is invalid.
+  int64_t versionAtCreate;
 
   explicit RoaringBitmap64Iterator(AddonData * addonData) :
-    ObjectWrap(addonData), iter(nullptr), exhausted(true) {}
+    ObjectWrap(addonData), iter(nullptr), exhausted(true), versionAtCreate(0) {
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RoaringBitmap64Iterator));
+  }
 
   ~RoaringBitmap64Iterator() {
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RoaringBitmap64Iterator));
     if (this->iter) {
       roaring64_iterator_free(this->iter);
       this->iter = nullptr;
@@ -16714,7 +16987,13 @@ inline void RoaringBitmap64Iterator_New(const v8::FunctionCallbackInfo<v8::Value
   }
   auto * instance = new (mem) RoaringBitmap64Iterator(addonData);
   instance->iter = roaring64_iterator_create(parent->bitmap);
+  if (instance->iter == nullptr) {
+    instance->~RoaringBitmap64Iterator();
+    bare_aligned_free(instance);
+    return v8utils::throwError(isolate, "RoaringBitmap64Iterator: failed to create iterator");
+  }
   instance->exhausted = !roaring64_iterator_has_value(instance->iter);
+  instance->versionAtCreate = parent->getVersion();
 
   int indices[2] = {0, 1};
   void * values[2] = {instance, (void *)(RoaringBitmap64Iterator::OBJECT_TOKEN)};
@@ -16738,6 +17017,11 @@ inline void RoaringBitmap64Iterator_next(const v8::FunctionCallbackInfo<v8::Valu
     RoaringBitmap64 * parent = ObjectWrap::TryUnwrap<RoaringBitmap64>(parentObj, isolate);
     if (parent == nullptr || parent->disposed) {
       return v8utils::throwError(isolate, "RoaringBitmap64Iterator: parent is disposed");
+    }
+    // Mutating the parent bitmap invalidates the underlying CRoaring iterator.
+    // Continuing to use it would be undefined behavior — throw instead.
+    if (parent->getVersion() != self->versionAtCreate) {
+      return v8utils::throwError(isolate, "RoaringBitmap64Iterator: parent bitmap was mutated during iteration");
     }
   }
 
@@ -16793,7 +17077,7 @@ inline void RoaringBitmap64Iterator_Init(v8::Local<v8::Object> exports, AddonDat
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_ITERATOR_H_
 
-#line 12 "src/cpp/RoaringBitmap64-main.h"
+#line 13 "src/cpp/RoaringBitmap64-main.h"
 
 inline void RoaringBitmap64_WeakCallback(v8::WeakCallbackInfo<RoaringBitmap64> const & info) {
   RoaringBitmap64 * p = info.GetParameter();
@@ -16846,13 +17130,16 @@ inline void RoaringBitmap64_New(const v8::FunctionCallbackInfo<v8::Value> & info
   instance->persistent.SetWeak(instance, RoaringBitmap64_WeakCallback, v8::WeakCallbackType::kParameter);
 
   if (info.Length() != 0 && !info[0]->IsUndefined() && !info[0]->IsNull()) {
-    // If the argument is itself a RoaringBitmap64 instance, skip addMany —
-    // the caller (typically clone) will copy the bitmap manually after
-    // construction. addMany only handles BigUint64Array / Iterable<bigint>.
+    // Reject another RoaringBitmap64 instance explicitly: passing a bitmap to
+    // the constructor is ambiguous (copy vs. iterate) and was previously a
+    // silent no-op. Users should call .clone() instead.
     RoaringBitmap64 * sourceRB64 = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
-    if (sourceRB64 == nullptr) {
-      RoaringBitmap64_addMany(info);
+    if (sourceRB64 != nullptr) {
+      return v8utils::throwTypeError(
+        isolate,
+        "RoaringBitmap64 constructor does not accept another RoaringBitmap64; use .clone() instead");
     }
+    RoaringBitmap64_addMany(info);
   }
 
   info.GetReturnValue().Set(holder);
@@ -17011,9 +17298,10 @@ inline void RoaringBitmap64_clone(const v8::FunctionCallbackInfo<v8::Value> & in
   }
   AddonData * addonData = self->addonData;
   v8::Local<v8::Function> cons = addonData->RoaringBitmap64_constructor.Get(isolate);
-  v8::Local<v8::Value> argv[1] = {info.This()};
+  // Pass no arguments: the constructor rejects RoaringBitmap64 instances
+  // explicitly; we copy the bitmap manually below.
   v8::Local<v8::Object> newObj;
-  if (!cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+  if (!cons->NewInstance(isolate->GetCurrentContext(), 0, nullptr).ToLocal(&newObj)) {
     return v8utils::throwError(isolate, "RoaringBitmap64.clone failed to create instance");
   }
   RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, isolate);
@@ -17021,8 +17309,12 @@ inline void RoaringBitmap64_clone(const v8::FunctionCallbackInfo<v8::Value> & in
     return v8utils::throwError(isolate, "RoaringBitmap64.clone failed to create instance");
   }
 
+  roaring64_bitmap_t * copy = roaring64_bitmap_copy(self->bitmap);
+  if (copy == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.clone: allocation failed");
+  }
   if (other->bitmap) roaring64_bitmap_free(other->bitmap);
-  other->bitmap = roaring64_bitmap_copy(self->bitmap);
+  other->bitmap = copy;
   other->invalidate();
   info.GetReturnValue().Set(newObj);
 }
@@ -17089,6 +17381,96 @@ inline void RoaringBitmap64_dispose(const v8::FunctionCallbackInfo<v8::Value> & 
     self->bitmap = nullptr;
   }
   self->invalidate();
+}
+
+// ---- Optimization / introspection ----
+
+inline void RoaringBitmap64_runOptimize(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  bool changed = roaring64_bitmap_run_optimize(self->bitmap);
+  // Only bump the iterator-version guard when container layout actually
+  // changed. When changed==false, no in-flight iterator is invalidated, so
+  // forcing them to throw "mutated" would be a false positive.
+  if (changed) self->invalidate();
+  info.GetReturnValue().Set(v8::Boolean::New(isolate, changed));
+}
+
+inline void RoaringBitmap64_statistics(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+
+  roaring64_statistics_t st;
+  roaring64_bitmap_statistics(self->bitmap, &st);
+
+  v8::Local<v8::Object> obj = v8::Object::New(isolate);
+
+#define SET_NUM(NAME, FIELD)                                                                       \
+  ignoreMaybeResult(obj->Set(                                                                      \
+    context,                                                                                       \
+    NEW_LITERAL_V8_STRING(isolate, NAME, v8::NewStringType::kInternalized),                        \
+    v8::Number::New(isolate, static_cast<double>(st.FIELD))))
+
+  SET_NUM("containers", n_containers);
+  SET_NUM("arrayContainers", n_array_containers);
+  SET_NUM("runContainers", n_run_containers);
+  SET_NUM("bitsetContainers", n_bitset_containers);
+  SET_NUM("valuesInArrayContainers", n_values_array_containers);
+  SET_NUM("valuesInRunContainers", n_values_run_containers);
+  SET_NUM("valuesInBitsetContainers", n_values_bitset_containers);
+  SET_NUM("bytesInArrayContainers", n_bytes_array_containers);
+  SET_NUM("bytesInRunContainers", n_bytes_run_containers);
+  SET_NUM("bytesInBitsetContainers", n_bytes_bitset_containers);
+
+#undef SET_NUM
+
+  ignoreMaybeResult(obj->Set(
+    context,
+    NEW_LITERAL_V8_STRING(isolate, "size", v8::NewStringType::kInternalized),
+    roaring_node_bigint::makeUint64BigInt(isolate, st.cardinality)));
+
+  if (st.cardinality == 0) {
+    ignoreMaybeResult(obj->Set(
+      context,
+      NEW_LITERAL_V8_STRING(isolate, "minValue", v8::NewStringType::kInternalized),
+      v8::Undefined(isolate)));
+    ignoreMaybeResult(obj->Set(
+      context,
+      NEW_LITERAL_V8_STRING(isolate, "maxValue", v8::NewStringType::kInternalized),
+      v8::Undefined(isolate)));
+  } else {
+    ignoreMaybeResult(obj->Set(
+      context,
+      NEW_LITERAL_V8_STRING(isolate, "minValue", v8::NewStringType::kInternalized),
+      roaring_node_bigint::makeUint64BigInt(isolate, st.min_value)));
+    ignoreMaybeResult(obj->Set(
+      context,
+      NEW_LITERAL_V8_STRING(isolate, "maxValue", v8::NewStringType::kInternalized),
+      roaring_node_bigint::makeUint64BigInt(isolate, st.max_value)));
+  }
+
+  info.GetReturnValue().Set(obj);
+}
+
+inline void RoaringBitmap64_internalValidate(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  const char * reason = nullptr;
+  bool ok = roaring64_bitmap_internal_validate(self->bitmap, &reason);
+  if (!ok) {
+    const char * msg = reason ? reason : "RoaringBitmap64 internal validation failed";
+    return v8utils::throwError(isolate, msg);
+  }
 }
 
 // ---- Symbol.iterator ----
@@ -17185,6 +17567,16 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   NODE_SET_PROTOTYPE_METHOD(ctor, "getSerializationSizeInBytes", RoaringBitmap64_getSerializationSizeInBytes);
   NODE_SET_PROTOTYPE_METHOD(ctor, "deserialize", RoaringBitmap64_deserializeInstance);
 
+  // Range ops
+  NODE_SET_PROTOTYPE_METHOD(ctor, "addRange", RoaringBitmap64_addRange);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "removeRange", RoaringBitmap64_removeRange);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "rangeCardinality", RoaringBitmap64_rangeCardinality);
+
+  // Optimization / introspection
+  NODE_SET_PROTOTYPE_METHOD(ctor, "runOptimize", RoaringBitmap64_runOptimize);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "statistics", RoaringBitmap64_statistics);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "internalValidate", RoaringBitmap64_internalValidate);
+
   // Dispose
   NODE_SET_PROTOTYPE_METHOD(ctor, "dispose", RoaringBitmap64_dispose);
 
@@ -17208,6 +17600,9 @@ inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addo
   addonData->setMethod(ctorObject, "xorCardinality", RoaringBitmap64_xorCardinalityStatic);
   addonData->setMethod(ctorObject, "andNotCardinality", RoaringBitmap64_andNotCardinalityStatic);
   addonData->setMethod(ctorObject, "jaccardIndex", RoaringBitmap64_jaccardIndexStatic);
+  addonData->setMethod(ctorObject, "orMany", RoaringBitmap64_orManyStatic);
+  addonData->setMethod(ctorObject, "andMany", RoaringBitmap64_andManyStatic);
+  addonData->setMethod(ctorObject, "fromRoaring32", RoaringBitmap64_fromRoaring32Static);
 
   // Static deserialize
   addonData->setMethod(ctorObject, "deserialize", RoaringBitmap64_deserializeStatic);
