@@ -12,7 +12,7 @@ async function testMemoryLeaks() {
   _gc();
   _gc();
 
-  const { RoaringBitmap32, getRoaringUsedMemory } = require("../");
+  const { RoaringBitmap32, RoaringBitmap64, getRoaringUsedMemory } = require("../");
 
   _gc();
   _gc();
@@ -20,12 +20,16 @@ async function testMemoryLeaks() {
   console.log();
   console.log("RoaringUsedMemory", getRoaringUsedMemory());
   console.log("RoaringBitmap32.getInstancesCount", RoaringBitmap32.getInstancesCount());
+  console.log("RoaringBitmap64.getInstancesCount", RoaringBitmap64.getInstancesCount());
 
   _gc();
   _gc();
 
   let a = new RoaringBitmap32([1, 2, 3]);
   let b = new RoaringBitmap32([1, 2]);
+
+  let a64 = new RoaringBitmap64([1n, 2n, 3n, 1n << 33n, 1n << 40n]);
+  let b64 = new RoaringBitmap64([1n, 2n, 1n << 33n]);
 
   console.time("buildup");
 
@@ -42,6 +46,19 @@ async function testMemoryLeaks() {
     }
   };
 
+  const operation64 = (i) => {
+    switch (i % 4) {
+      case 1:
+        return RoaringBitmap64.and(a64, b64);
+      case 2:
+        return RoaringBitmap64.xor(a64, b64);
+      case 3:
+        return RoaringBitmap64.andNot(a64, b64);
+      default:
+        return RoaringBitmap64.or(a64, b64);
+    }
+  };
+
   let promises = [];
   for (let i = 0; i < 10000; i++) {
     const bmp = operation(i);
@@ -49,11 +66,18 @@ async function testMemoryLeaks() {
       promises.push(bmp.toUint32ArrayAsync());
     }
     promises.push(bmp.serializeAsync(i & 4 ? "croaring" : i & 8 ? "portable" : "unsafe_frozen_croaring"));
+
+    const bmp64 = operation64(i);
+    bmp64.serialize(i & 4 ? "portable" : "unsafe_frozen_croaring");
+    if (i < 5) {
+      promises.push(RoaringBitmap64.fromArrayAsync(bmp64.toUint64Array()));
+    }
   }
 
   console.log();
   console.log("RoaringUsedMemory", getRoaringUsedMemory());
   console.log("RoaringBitmap32.getInstancesCount", RoaringBitmap32.getInstancesCount());
+  console.log("RoaringBitmap64.getInstancesCount", RoaringBitmap64.getInstancesCount());
   console.log();
 
   await Promise.all(promises);
@@ -75,11 +99,13 @@ async function testMemoryLeaks() {
   promises = [];
   for (let i = 0; i < 10000000; i++) {
     const bmp = operation(i);
+    const bmp64 = operation64(i);
     if (i % 100000 === 0) {
       process.stdout.write(".");
       _gc();
       _gc();
       promises.push(bmp.serializeAsync("croaring").then(() => undefined));
+      bmp64.serialize("portable");
     }
   }
   await Promise.all(promises);
@@ -90,10 +116,13 @@ async function testMemoryLeaks() {
   console.log();
   console.log("RoaringUsedMemory", getRoaringUsedMemory());
   console.log("RoaringBitmap32.getInstancesCount", RoaringBitmap32.getInstancesCount());
+  console.log("RoaringBitmap64.getInstancesCount", RoaringBitmap64.getInstancesCount());
   console.log();
 
   a = null;
   b = null;
+  a64 = null;
+  b64 = null;
 
   const promise = new Promise((resolve, reject) => {
     for (let i = 0; i < 10; ++i) {
@@ -111,6 +140,7 @@ async function testMemoryLeaks() {
         console.log();
         console.log("RoaringUsedMemory", getRoaringUsedMemory());
         console.log("RoaringBitmap32.getInstancesCount", RoaringBitmap32.getInstancesCount());
+        console.log("RoaringBitmap64.getInstancesCount", RoaringBitmap64.getInstancesCount());
         console.log();
 
         setTimeout(() => {
@@ -120,7 +150,17 @@ async function testMemoryLeaks() {
 
           if (RoaringBitmap32.getInstancesCount() !== 0) {
             reject(
-              new Error(`Memory leak detected. ${RoaringBitmap32.getInstancesCount()} instances are still allocated.`),
+              new Error(
+                `Memory leak detected. ${RoaringBitmap32.getInstancesCount()} RoaringBitmap32 instances are still allocated.`,
+              ),
+            );
+          }
+
+          if (RoaringBitmap64.getInstancesCount() !== 0) {
+            reject(
+              new Error(
+                `Memory leak detected. ${RoaringBitmap64.getInstancesCount()} RoaringBitmap64 instances are still allocated.`,
+              ),
             );
           }
           resolve();
