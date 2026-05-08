@@ -1,6 +1,7 @@
 #include "aligned-buffers.h"
 #include "RoaringBitmap32-main.h"
 #include "RoaringBitmap32BufferedIterator.h"
+#include "RoaringBitmap64-main.h"
 
 using namespace v8;
 
@@ -29,6 +30,8 @@ void InitRoaringNode(Local<Object> exports) {
   AlignedBuffers_Init(exports, addonData);
   RoaringBitmap32_Init(exports, addonData);
   RoaringBitmap32BufferedIterator_Init(exports, addonData);
+  RoaringBitmap64Iterator_Init(exports, addonData);
+  RoaringBitmap64_Init(exports, addonData);
 
   addonData->setMethod(exports, "getRoaringUsedMemory", getRoaringUsedMemory);
 

@@ -23,6 +23,7 @@ class AddonData final {
   v8::Global<v8::Function> Buffer_from;
 
   std::atomic<uint64_t> RoaringBitmap32_instances;
+  std::atomic<uint64_t> RoaringBitmap64_instances;
   std::atomic<uint32_t> activeAsyncWorkers;
   std::atomic<bool> shuttingDown;
 
@@ -32,10 +33,21 @@ class AddonData final {
   v8::Global<v8::FunctionTemplate> RoaringBitmap32BufferedIterator_constructorTemplate;
   v8::Global<v8::Function> RoaringBitmap32BufferedIterator_constructor;
 
+  v8::Global<v8::FunctionTemplate> RoaringBitmap64_constructorTemplate;
+  v8::Global<v8::Function> RoaringBitmap64_constructor;
+
+  v8::Global<v8::FunctionTemplate> RoaringBitmap64Iterator_constructorTemplate;
+  v8::Global<v8::Function> RoaringBitmap64Iterator_constructor;
+
   v8::Global<v8::External> external;
 
   inline explicit AddonData(v8::Isolate * isolate) :
-    isolate(isolate), strings(isolate), RoaringBitmap32_instances(0), activeAsyncWorkers(0), shuttingDown(false) {
+    isolate(isolate),
+    strings(isolate),
+    RoaringBitmap32_instances(0),
+    RoaringBitmap64_instances(0),
+    activeAsyncWorkers(0),
+    shuttingDown(false) {
     const int64_t externalSize = static_cast<int64_t>(sizeof(AddonData)) + 256;
     isolate->AdjustAmountOfExternalAllocatedMemory(externalSize);
   }
@@ -51,6 +63,10 @@ class AddonData final {
     RoaringBitmap32_constructor.Reset();
     RoaringBitmap32BufferedIterator_constructorTemplate.Reset();
     RoaringBitmap32BufferedIterator_constructor.Reset();
+    RoaringBitmap64_constructorTemplate.Reset();
+    RoaringBitmap64_constructor.Reset();
+    RoaringBitmap64Iterator_constructorTemplate.Reset();
+    RoaringBitmap64Iterator_constructor.Reset();
     external.Reset();
     const int64_t externalSize = -static_cast<int64_t>(sizeof(AddonData)) - 256;
     this->isolate->AdjustAmountOfExternalAllocatedMemory(externalSize);

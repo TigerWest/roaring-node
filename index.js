@@ -45,7 +45,7 @@ const { defineProperty } = Reflect;
 
 defineProperty(roaring, "__esModule", { value: true, configurable: true });
 
-const { RoaringBitmap32, RoaringBitmap32BufferedIterator } = roaring;
+const { RoaringBitmap32, RoaringBitmap32BufferedIterator, RoaringBitmap64, RoaringBitmap64Iterator } = roaring;
 
 class RoaringBitmap32IteratorResult {
   constructor() {

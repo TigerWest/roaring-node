@@ -2659,5 +2659,79 @@ export type RoaringBitmap32Callback = (error: Error | null, bitmap: RoaringBitma
 
 export type RoaringBitmap32ArrayCallback = (error: Error | null, bitmap: RoaringBitmap32[] | undefined) => void;
 
+/**
+ * Roaring bitmap supporting unsigned 64-bit integers, exposed via BigInt.
+ *
+ * Mirrors the structure of RoaringBitmap32 but operates on the full uint64
+ * value space (`0n` to `2n ** 64n - 1n`). Independent of RoaringBitmap32:
+ * no cross-type set operations or conversions in this MVP.
+ */
+export class RoaringBitmap64 {
+  constructor(values?: BigUint64Array | Iterable<bigint>);
+
+  readonly size: bigint;
+  readonly isEmpty: boolean;
+  readonly isDisposed: boolean;
+
+  add(value: bigint): this;
+  tryAdd(value: bigint): boolean;
+  remove(value: bigint): this;
+  delete(value: bigint): boolean;
+  has(value: bigint): boolean;
+  contains(value: bigint): boolean;
+  includes(value: bigint): boolean;
+  clear(): void;
+
+  addMany(values: BigUint64Array | Iterable<bigint>): this;
+  removeMany(values: BigUint64Array | Iterable<bigint>): this;
+
+  minimum(): bigint | undefined;
+  maximum(): bigint | undefined;
+  clone(): RoaringBitmap64;
+
+  equals(other: RoaringBitmap64): boolean;
+  isSubset(other: RoaringBitmap64): boolean;
+  isStrictSubset(other: RoaringBitmap64): boolean;
+
+  andInPlace(other: RoaringBitmap64): this;
+  orInPlace(other: RoaringBitmap64): this;
+  xorInPlace(other: RoaringBitmap64): this;
+  andNotInPlace(other: RoaringBitmap64): this;
+
+  toArray(): bigint[];
+  toUint64Array(): BigUint64Array;
+
+  serialize(): Buffer;
+  deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): this;
+  getSerializationSizeInBytes(): bigint;
+
+  dispose(): void;
+
+  [Symbol.iterator](): RoaringBitmap64Iterator;
+
+  static and(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
+  static or(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
+  static xor(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
+  static andNot(a: RoaringBitmap64, b: RoaringBitmap64): RoaringBitmap64;
+
+  static andCardinality(a: RoaringBitmap64, b: RoaringBitmap64): bigint;
+  static orCardinality(a: RoaringBitmap64, b: RoaringBitmap64): bigint;
+  static xorCardinality(a: RoaringBitmap64, b: RoaringBitmap64): bigint;
+  static andNotCardinality(a: RoaringBitmap64, b: RoaringBitmap64): bigint;
+
+  static jaccardIndex(a: RoaringBitmap64, b: RoaringBitmap64): number;
+
+  static deserialize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): RoaringBitmap64;
+  static getDeserializationSize(buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView): bigint;
+}
+
+/**
+ * Forward iterator over the values of a RoaringBitmap64.
+ */
+export class RoaringBitmap64Iterator implements IterableIterator<bigint> {
+  next(): IteratorResult<bigint>;
+  [Symbol.iterator](): this;
+}
+
 // tslint:disable-next-line:no-empty-interface
 declare interface Buffer extends Uint8Array {}

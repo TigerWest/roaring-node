@@ -44,6 +44,8 @@
 #include "../../submodules/CRoaring/src/roaring.c"
 #include "../../submodules/CRoaring/src/roaring_priority_queue.c"
 #include "../../submodules/CRoaring/src/roaring_array.c"
+#include "../../submodules/CRoaring/src/art/art.c"
+#include "../../submodules/CRoaring/src/roaring64.c"
 
 #if defined(__clang__)
 #  pragma clang diagnostic pop

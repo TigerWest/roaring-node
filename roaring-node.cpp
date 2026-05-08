@@ -10290,6 +10290,8 @@ class AddonDataStrings final {
   v8::Global<v8::String> n;
   v8::Global<v8::String> readonly;
   v8::Global<v8::String> RoaringBitmap32;
+  v8::Global<v8::String> RoaringBitmap64;
+  v8::Global<v8::String> RoaringBitmap64Iterator;
   v8::Global<v8::Symbol> symbol_rnshared;
 
   v8::Global<v8::String> OperationFailed;
@@ -10302,6 +10304,8 @@ class AddonDataStrings final {
     literal(isolate, this->n, "n");
     literal(isolate, this->readonly, "readonly");
     literal(isolate, this->RoaringBitmap32, "RoaringBitmap32");
+    literal(isolate, this->RoaringBitmap64, "RoaringBitmap64");
+    literal(isolate, this->RoaringBitmap64Iterator, "RoaringBitmap64Iterator");
     literal(isolate, this->Comma, ",");
 
     literal(isolate, this->OperationFailed, "Operation failed");
@@ -10340,6 +10344,7 @@ class AddonData final {
   v8::Global<v8::Function> Buffer_from;
 
   std::atomic<uint64_t> RoaringBitmap32_instances;
+  std::atomic<uint64_t> RoaringBitmap64_instances;
   std::atomic<uint32_t> activeAsyncWorkers;
   std::atomic<bool> shuttingDown;
 
@@ -10349,10 +10354,21 @@ class AddonData final {
   v8::Global<v8::FunctionTemplate> RoaringBitmap32BufferedIterator_constructorTemplate;
   v8::Global<v8::Function> RoaringBitmap32BufferedIterator_constructor;
 
+  v8::Global<v8::FunctionTemplate> RoaringBitmap64_constructorTemplate;
+  v8::Global<v8::Function> RoaringBitmap64_constructor;
+
+  v8::Global<v8::FunctionTemplate> RoaringBitmap64Iterator_constructorTemplate;
+  v8::Global<v8::Function> RoaringBitmap64Iterator_constructor;
+
   v8::Global<v8::External> external;
 
   inline explicit AddonData(v8::Isolate * isolate) :
-    isolate(isolate), strings(isolate), RoaringBitmap32_instances(0), activeAsyncWorkers(0), shuttingDown(false) {
+    isolate(isolate),
+    strings(isolate),
+    RoaringBitmap32_instances(0),
+    RoaringBitmap64_instances(0),
+    activeAsyncWorkers(0),
+    shuttingDown(false) {
     const int64_t externalSize = static_cast<int64_t>(sizeof(AddonData)) + 256;
     isolate->AdjustAmountOfExternalAllocatedMemory(externalSize);
   }
@@ -10368,6 +10384,10 @@ class AddonData final {
     RoaringBitmap32_constructor.Reset();
     RoaringBitmap32BufferedIterator_constructorTemplate.Reset();
     RoaringBitmap32BufferedIterator_constructor.Reset();
+    RoaringBitmap64_constructorTemplate.Reset();
+    RoaringBitmap64_constructor.Reset();
+    RoaringBitmap64Iterator_constructorTemplate.Reset();
+    RoaringBitmap64Iterator_constructor.Reset();
     external.Reset();
     const int64_t externalSize = -static_cast<int64_t>(sizeof(AddonData)) - 256;
     this->isolate->AdjustAmountOfExternalAllocatedMemory(externalSize);
@@ -16044,7 +16064,1162 @@ void RoaringBitmap32BufferedIterator_Init(v8::Local<v8::Object> exports, AddonDa
 
 #endif  // ROARING_NODE_ROARING_BITMAP_32_BUFFERED_ITERATOR_
 
-#line 4 "src/cpp/main.cpp"
+#line 1 "src/cpp/RoaringBitmap64-main.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_MAIN_H_
+#define ROARING_NODE_ROARINGBITMAP64_MAIN_H_
+
+#line 1 "src/cpp/RoaringBitmap64.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_H_
+#define ROARING_NODE_ROARINGBITMAP64_H_
+
+#line 6 "src/cpp/RoaringBitmap64.h"
+
+class RoaringBitmap64;
+inline void RoaringBitmap64_WeakCallback(v8::WeakCallbackInfo<RoaringBitmap64> const & info);
+
+class RoaringBitmap64 final : public ObjectWrap {
+ public:
+  // Token verified by ObjectWrap::TryUnwrap. Distinct from the 32-bit token.
+  static const constexpr uint64_t OBJECT_TOKEN = 0x21524F4152360000ULL;
+
+  roaring64_bitmap_t * bitmap;
+  int64_t sizeCache;
+  int64_t _version;
+  bool disposed;
+  v8::Global<v8::Object> persistent;
+
+  inline int64_t getVersion() const { return this->_version; }
+
+  inline void invalidate() {
+    this->sizeCache = -1;
+    ++this->_version;
+  }
+
+  inline bool isEmpty() const {
+    if (this->sizeCache == 0) return true;
+    bool r = this->bitmap == nullptr || roaring64_bitmap_is_empty(this->bitmap);
+    if (r) const_cast<RoaringBitmap64 *>(this)->sizeCache = 0;
+    return r;
+  }
+
+  inline uint64_t getSize() const {
+    int64_t s = this->sizeCache;
+    if (s < 0) {
+      s = this->bitmap ? (int64_t)roaring64_bitmap_get_cardinality(this->bitmap) : 0;
+      const_cast<RoaringBitmap64 *>(this)->sizeCache = s;
+    }
+    return (uint64_t)s;
+  }
+
+  explicit RoaringBitmap64(AddonData * addonData) :
+    ObjectWrap(addonData),
+    bitmap(roaring64_bitmap_create()),
+    sizeCache(0),
+    _version(0),
+    disposed(false) {
+    ++addonData->RoaringBitmap64_instances;
+    _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RoaringBitmap64));
+  }
+
+  ~RoaringBitmap64() {
+    _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RoaringBitmap64));
+    --this->addonData->RoaringBitmap64_instances;
+    if (this->bitmap != nullptr) {
+      roaring64_bitmap_free(this->bitmap);
+      this->bitmap = nullptr;
+    }
+    if (!this->persistent.IsEmpty()) {
+      this->persistent.ClearWeak();
+    }
+  }
+};
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_H_
+
+#line 1 "src/cpp/RoaringBitmap64-bulk.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_BULK_H_
+#define ROARING_NODE_ROARINGBITMAP64_BULK_H_
+
+#include <vector>
+
+#line 1 "src/cpp/bigint-utils.h"
+#ifndef ROARING_NODE_BIGINT_UTILS_H_
+#define ROARING_NODE_BIGINT_UTILS_H_
+
+#line 5 "src/cpp/bigint-utils.h"
+
+namespace roaring_node_bigint {
+
+// Read a BigInt argument as uint64_t. Returns false on type error or range
+// loss (and throws a TypeError/RangeError). Returns true and writes *out on
+// success.
+inline bool readUint64BigInt(
+  v8::Isolate * isolate, v8::Local<v8::Value> value, uint64_t * out, const char * paramName) {
+  if (!value->IsBigInt()) {
+    auto msg = std::string(paramName) + " must be a BigInt";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  bool lossless = false;
+  uint64_t v = value.As<v8::BigInt>()->Uint64Value(&lossless);
+  if (!lossless) {
+    auto msg = std::string(paramName) + " out of uint64 range";
+    isolate->ThrowException(v8::Exception::RangeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  *out = v;
+  return true;
+}
+
+inline v8::Local<v8::BigInt> makeUint64BigInt(v8::Isolate * isolate, uint64_t value) {
+  return v8::BigInt::NewFromUnsigned(isolate, value);
+}
+
+// Try to view a value as a contiguous byte buffer (Buffer / Uint8Array /
+// ArrayBuffer / DataView). On success writes *outData and *outLen and
+// returns true. On unsupported type returns false WITHOUT throwing.
+inline bool tryGetByteBuffer(
+  v8::Isolate * /*isolate*/, v8::Local<v8::Value> value, const uint8_t ** outData, size_t * outLen) {
+  if (value.IsEmpty()) return false;
+  if (node::Buffer::HasInstance(value)) {
+    *outData = reinterpret_cast<const uint8_t *>(node::Buffer::Data(value));
+    *outLen = node::Buffer::Length(value);
+    return true;
+  }
+  if (value->IsUint8Array()) {
+    auto ta = value.As<v8::Uint8Array>();
+    auto ab = ta->Buffer();
+    *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
+    *outLen = ta->ByteLength();
+    return true;
+  }
+  if (value->IsTypedArray()) {
+    auto ta = value.As<v8::TypedArray>();
+    auto ab = ta->Buffer();
+    *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset();
+    *outLen = ta->ByteLength();
+    return true;
+  }
+  if (value->IsDataView()) {
+    auto dv = value.As<v8::DataView>();
+    auto ab = dv->Buffer();
+    *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + dv->ByteOffset();
+    *outLen = dv->ByteLength();
+    return true;
+  }
+  if (value->IsArrayBuffer()) {
+    auto ab = value.As<v8::ArrayBuffer>();
+    *outData = static_cast<const uint8_t *>(ab->GetBackingStore()->Data());
+    *outLen = ab->ByteLength();
+    return true;
+  }
+  return false;
+}
+
+// View a BigUint64Array as a uint64_t* span. Returns false if not a BigUint64Array.
+inline bool tryGetBigUint64Array(
+  v8::Local<v8::Value> value, const uint64_t ** outData, size_t * outLen) {
+  if (value.IsEmpty() || !value->IsBigUint64Array()) {
+    return false;
+  }
+  auto ta = value.As<v8::BigUint64Array>();
+  auto ab = ta->Buffer();
+  *outData = reinterpret_cast<const uint64_t *>(
+    static_cast<const uint8_t *>(ab->GetBackingStore()->Data()) + ta->ByteOffset());
+  *outLen = ta->Length();
+  return true;
+}
+
+}  // namespace roaring_node_bigint
+
+#endif  // ROARING_NODE_BIGINT_UTILS_H_
+
+#line 8 "src/cpp/RoaringBitmap64-bulk.h"
+
+namespace RoaringBitmap64_bulk_internal {
+
+inline bool drainIterable(
+  v8::Isolate * isolate,
+  v8::Local<v8::Value> iterable,
+  std::vector<uint64_t> & out,
+  const char * paramName) {
+  auto context = isolate->GetCurrentContext();
+
+  if (iterable->IsArray()) {
+    auto arr = iterable.As<v8::Array>();
+    uint32_t len = arr->Length();
+    out.reserve(out.size() + len);
+    for (uint32_t i = 0; i < len; ++i) {
+      v8::Local<v8::Value> el;
+      if (!arr->Get(context, i).ToLocal(&el)) return false;
+      uint64_t v;
+      if (!roaring_node_bigint::readUint64BigInt(isolate, el, &v, paramName)) return false;
+      out.push_back(v);
+    }
+    return true;
+  }
+
+  if (!iterable->IsObject()) {
+    auto msg = std::string(paramName) + " must be a BigUint64Array or Iterable<bigint>";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  auto obj = iterable.As<v8::Object>();
+  auto iteratorSymbol = v8::Symbol::GetIterator(isolate);
+  v8::Local<v8::Value> iterFnVal;
+  if (!obj->Get(context, iteratorSymbol).ToLocal(&iterFnVal) || !iterFnVal->IsFunction()) {
+    auto msg = std::string(paramName) + " must be iterable";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  v8::Local<v8::Value> iterVal;
+  if (!iterFnVal.As<v8::Function>()->Call(context, obj, 0, nullptr).ToLocal(&iterVal) || !iterVal->IsObject()) {
+    return false;
+  }
+  auto iter = iterVal.As<v8::Object>();
+  auto nextKey = v8::String::NewFromUtf8Literal(isolate, "next", v8::NewStringType::kInternalized);
+  v8::Local<v8::Value> nextFnVal;
+  if (!iter->Get(context, nextKey).ToLocal(&nextFnVal) || !nextFnVal->IsFunction()) return false;
+  auto nextFn = nextFnVal.As<v8::Function>();
+  auto valueKey = v8::String::NewFromUtf8Literal(isolate, "value", v8::NewStringType::kInternalized);
+  auto doneKey = v8::String::NewFromUtf8Literal(isolate, "done", v8::NewStringType::kInternalized);
+
+  while (true) {
+    v8::Local<v8::Value> stepVal;
+    if (!nextFn->Call(context, iter, 0, nullptr).ToLocal(&stepVal) || !stepVal->IsObject()) return false;
+    auto step = stepVal.As<v8::Object>();
+    v8::Local<v8::Value> doneVal;
+    if (!step->Get(context, doneKey).ToLocal(&doneVal)) return false;
+    if (doneVal->BooleanValue(isolate)) break;
+    v8::Local<v8::Value> valueVal;
+    if (!step->Get(context, valueKey).ToLocal(&valueVal)) return false;
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, valueVal, &v, paramName)) return false;
+    out.push_back(v);
+  }
+  return true;
+}
+
+}  // namespace RoaringBitmap64_bulk_internal
+
+inline void RoaringBitmap64_addMany(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.addMany expects 1 argument");
+
+  const uint64_t * data = nullptr;
+  size_t n = 0;
+  if (roaring_node_bigint::tryGetBigUint64Array(info[0], &data, &n)) {
+    if (n > 0) {
+      roaring64_bitmap_add_many(self->bitmap, n, data);
+      self->invalidate();
+    }
+    info.GetReturnValue().Set(info.This());
+    return;
+  }
+
+  std::vector<uint64_t> values;
+  if (!RoaringBitmap64_bulk_internal::drainIterable(isolate, info[0], values, "addMany value")) return;
+  if (!values.empty()) {
+    roaring64_bitmap_add_many(self->bitmap, values.size(), values.data());
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_removeMany(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.removeMany expects 1 argument");
+
+  const uint64_t * data = nullptr;
+  size_t n = 0;
+  if (roaring_node_bigint::tryGetBigUint64Array(info[0], &data, &n)) {
+    if (n > 0) {
+      roaring64_bitmap_remove_many(self->bitmap, n, data);
+      self->invalidate();
+    }
+    info.GetReturnValue().Set(info.This());
+    return;
+  }
+
+  std::vector<uint64_t> values;
+  if (!RoaringBitmap64_bulk_internal::drainIterable(isolate, info[0], values, "removeMany value")) return;
+  if (!values.empty()) {
+    roaring64_bitmap_remove_many(self->bitmap, values.size(), values.data());
+    self->invalidate();
+  }
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_toUint64Array(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
+  size_t byteLen = (size_t)card * sizeof(uint64_t);
+  auto ab = v8::ArrayBuffer::New(isolate, byteLen);
+  if (card > 0) {
+    uint64_t * dst = reinterpret_cast<uint64_t *>(ab->GetBackingStore()->Data());
+    roaring64_bitmap_to_uint64_array(self->bitmap, dst);
+  }
+  auto ta = v8::BigUint64Array::New(ab, 0, (size_t)card);
+  info.GetReturnValue().Set(ta);
+}
+
+inline void RoaringBitmap64_toArray(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  auto context = isolate->GetCurrentContext();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+
+  uint64_t card = roaring64_bitmap_get_cardinality(self->bitmap);
+  if (card > 0xFFFFFFFFu) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.toArray: cardinality exceeds JS Array limit");
+  }
+  uint32_t n = (uint32_t)card;
+  v8::Local<v8::Array> arr = v8::Array::New(isolate, n);
+  if (n == 0) {
+    info.GetReturnValue().Set(arr);
+    return;
+  }
+
+  std::vector<uint64_t> tmp(n);
+  roaring64_bitmap_to_uint64_array(self->bitmap, tmp.data());
+  for (uint32_t i = 0; i < n; ++i) {
+    auto bi = v8::BigInt::NewFromUnsigned(isolate, tmp[i]);
+    if (arr->Set(context, i, bi).IsNothing()) return;
+  }
+  info.GetReturnValue().Set(arr);
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_BULK_H_
+
+#line 1 "src/cpp/RoaringBitmap64-ops.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_OPS_H_
+#define ROARING_NODE_ROARINGBITMAP64_OPS_H_
+
+#line 5 "src/cpp/RoaringBitmap64-ops.h"
+
+namespace RoaringBitmap64_ops_internal {
+inline RoaringBitmap64 * unwrapOther(
+  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
+  if (info.Length() < 1) {
+    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return nullptr;
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other == nullptr || other->disposed) {
+    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return nullptr;
+  }
+  return other;
+}
+}  // namespace RoaringBitmap64_ops_internal
+
+#define ROARINGBITMAP64_INPLACE(NAME, FN, METHODNAME)                                               \
+  inline void RoaringBitmap64_##NAME(const v8::FunctionCallbackInfo<v8::Value> & info) {            \
+    v8::Isolate * isolate = info.GetIsolate();                                                      \
+    RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);          \
+    if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed"); \
+    RoaringBitmap64 * other = RoaringBitmap64_ops_internal::unwrapOther(isolate, info, METHODNAME); \
+    if (other == nullptr) return;                                                                   \
+    FN(self->bitmap, other->bitmap);                                                                \
+    self->invalidate();                                                                             \
+    info.GetReturnValue().Set(info.This());                                                         \
+  }
+
+ROARINGBITMAP64_INPLACE(andInPlace, roaring64_bitmap_and_inplace, "RoaringBitmap64.andInPlace")
+ROARINGBITMAP64_INPLACE(orInPlace, roaring64_bitmap_or_inplace, "RoaringBitmap64.orInPlace")
+ROARINGBITMAP64_INPLACE(xorInPlace, roaring64_bitmap_xor_inplace, "RoaringBitmap64.xorInPlace")
+ROARINGBITMAP64_INPLACE(andNotInPlace, roaring64_bitmap_andnot_inplace, "RoaringBitmap64.andNotInPlace")
+
+#undef ROARINGBITMAP64_INPLACE
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_OPS_H_
+
+#line 1 "src/cpp/RoaringBitmap64-static-ops.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
+#define ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
+
+#line 6 "src/cpp/RoaringBitmap64-static-ops.h"
+
+namespace RoaringBitmap64_static_internal {
+inline bool unwrapPair(
+  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName,
+  const RoaringBitmap64 ** outA, const RoaringBitmap64 ** outB) {
+  if (info.Length() < 2) {
+    auto msg = std::string(methodName) + " expects two RoaringBitmap64 arguments";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  *outA = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[0], isolate);
+  *outB = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info[1], isolate);
+  if (*outA == nullptr || *outB == nullptr || (*outA)->disposed || (*outB)->disposed) {
+    auto msg = std::string(methodName) + " arguments must be non-disposed RoaringBitmap64";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return false;
+  }
+  return true;
+}
+
+inline void returnNewBitmap(
+  v8::Isolate * isolate, AddonData * addonData,
+  const v8::FunctionCallbackInfo<v8::Value> & info, roaring64_bitmap_t * raw) {
+  auto cons = addonData->RoaringBitmap64_constructor.Get(isolate);
+  v8::Local<v8::Object> newObj;
+  v8::Local<v8::Value> argv[1] = {v8::Undefined(isolate)};
+  if (!cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+    if (raw) roaring64_bitmap_free(raw);
+    return;
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, isolate);
+  if (other == nullptr) {
+    if (raw) roaring64_bitmap_free(raw);
+    return;
+  }
+  if (other->bitmap) roaring64_bitmap_free(other->bitmap);
+  other->bitmap = raw;
+  other->invalidate();
+  info.GetReturnValue().Set(newObj);
+}
+}  // namespace RoaringBitmap64_static_internal
+
+#define ROARINGBITMAP64_STATIC_OP(NAME, FN, METHODNAME)                                                 \
+  inline void RoaringBitmap64_##NAME##Static(const v8::FunctionCallbackInfo<v8::Value> & info) {        \
+    v8::Isolate * isolate = info.GetIsolate();                                                          \
+    AddonData * addonData = AddonData::get(info);                                                       \
+    if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);                \
+    const RoaringBitmap64 * a;                                                                          \
+    const RoaringBitmap64 * b;                                                                          \
+    if (!RoaringBitmap64_static_internal::unwrapPair(isolate, info, METHODNAME, &a, &b)) return;        \
+    roaring64_bitmap_t * r = FN(a->bitmap, b->bitmap);                                                  \
+    RoaringBitmap64_static_internal::returnNewBitmap(isolate, addonData, info, r);                      \
+  }
+
+ROARINGBITMAP64_STATIC_OP(and, roaring64_bitmap_and, "RoaringBitmap64.and")
+ROARINGBITMAP64_STATIC_OP(or, roaring64_bitmap_or, "RoaringBitmap64.or")
+ROARINGBITMAP64_STATIC_OP(xor, roaring64_bitmap_xor, "RoaringBitmap64.xor")
+ROARINGBITMAP64_STATIC_OP(andNot, roaring64_bitmap_andnot, "RoaringBitmap64.andNot")
+
+#undef ROARINGBITMAP64_STATIC_OP
+
+#define ROARINGBITMAP64_STATIC_CARD(NAME, FN, METHODNAME)                                                \
+  inline void RoaringBitmap64_##NAME##CardinalityStatic(const v8::FunctionCallbackInfo<v8::Value> & info) { \
+    v8::Isolate * isolate = info.GetIsolate();                                                           \
+    const RoaringBitmap64 * a;                                                                           \
+    const RoaringBitmap64 * b;                                                                           \
+    if (!RoaringBitmap64_static_internal::unwrapPair(isolate, info, METHODNAME, &a, &b)) return;         \
+    uint64_t r = FN(a->bitmap, b->bitmap);                                                               \
+    info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, r));                                  \
+  }
+
+ROARINGBITMAP64_STATIC_CARD(and, roaring64_bitmap_and_cardinality, "RoaringBitmap64.andCardinality")
+ROARINGBITMAP64_STATIC_CARD(or, roaring64_bitmap_or_cardinality, "RoaringBitmap64.orCardinality")
+ROARINGBITMAP64_STATIC_CARD(xor, roaring64_bitmap_xor_cardinality, "RoaringBitmap64.xorCardinality")
+ROARINGBITMAP64_STATIC_CARD(andNot, roaring64_bitmap_andnot_cardinality, "RoaringBitmap64.andNotCardinality")
+
+#undef ROARINGBITMAP64_STATIC_CARD
+
+inline void RoaringBitmap64_jaccardIndexStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * a;
+  const RoaringBitmap64 * b;
+  if (!RoaringBitmap64_static_internal::unwrapPair(isolate, info, "RoaringBitmap64.jaccardIndex", &a, &b)) return;
+  double r = roaring64_bitmap_jaccard_index(a->bitmap, b->bitmap);
+  info.GetReturnValue().Set(r);
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_STATIC_OPS_H_
+
+#line 1 "src/cpp/RoaringBitmap64-serialization.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_SERIALIZATION_H_
+#define ROARING_NODE_ROARINGBITMAP64_SERIALIZATION_H_
+
+#line 8 "src/cpp/RoaringBitmap64-serialization.h"
+
+namespace RoaringBitmap64_serialization_internal {
+inline bool extractBuffer(
+  v8::Isolate * isolate, v8::Local<v8::Value> v, const uint8_t ** outData, size_t * outLen) {
+  if (roaring_node_bigint::tryGetByteBuffer(isolate, v, outData, outLen)) return true;
+  isolate->ThrowException(v8::Exception::TypeError(
+    v8::String::NewFromUtf8Literal(
+      isolate,
+      "RoaringBitmap64.deserialize expects a Buffer, Uint8Array, ArrayBuffer, or DataView",
+      v8::NewStringType::kNormal)));
+  return false;
+}
+}  // namespace RoaringBitmap64_serialization_internal
+
+inline void RoaringBitmap64_getSerializationSizeInBytes(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  size_t s = roaring64_bitmap_portable_size_in_bytes(self->bitmap);
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, (uint64_t)s));
+}
+
+inline void RoaringBitmap64_serialize(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+
+  size_t size = roaring64_bitmap_portable_size_in_bytes(self->bitmap);
+  auto bufMaybe = node::Buffer::New(isolate, size);
+  v8::Local<v8::Object> buf;
+  if (!bufMaybe.ToLocal(&buf)) return;
+  size_t written = roaring64_bitmap_portable_serialize(self->bitmap, node::Buffer::Data(buf));
+  if (written != size) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.serialize size mismatch");
+  }
+  info.GetReturnValue().Set(buf);
+}
+
+inline void RoaringBitmap64_deserializeStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.deserialize expects 1 argument");
+
+  const uint8_t * data;
+  size_t len;
+  if (!RoaringBitmap64_serialization_internal::extractBuffer(isolate, info[0], &data, &len)) return;
+
+  roaring64_bitmap_t * r =
+    roaring64_bitmap_portable_deserialize_safe(reinterpret_cast<const char *>(data), len);
+  if (r == nullptr) return v8utils::throwError(isolate, "RoaringBitmap64.deserialize: invalid roaring buffer");
+
+  auto cons = addonData->RoaringBitmap64_constructor.Get(isolate);
+  v8::Local<v8::Object> newObj;
+  v8::Local<v8::Value> argv[1] = {v8::Undefined(isolate)};
+  if (!cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+    roaring64_bitmap_free(r);
+    return;
+  }
+  RoaringBitmap64 * out = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, isolate);
+  if (out == nullptr) {
+    roaring64_bitmap_free(r);
+    return;
+  }
+  if (out->bitmap) roaring64_bitmap_free(out->bitmap);
+  out->bitmap = r;
+  out->invalidate();
+  info.GetReturnValue().Set(newObj);
+}
+
+inline void RoaringBitmap64_deserializeInstance(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.deserialize expects 1 argument");
+
+  const uint8_t * data;
+  size_t len;
+  if (!RoaringBitmap64_serialization_internal::extractBuffer(isolate, info[0], &data, &len)) return;
+
+  roaring64_bitmap_t * r =
+    roaring64_bitmap_portable_deserialize_safe(reinterpret_cast<const char *>(data), len);
+  if (r == nullptr) return v8utils::throwError(isolate, "RoaringBitmap64.deserialize: invalid roaring buffer");
+
+  if (self->bitmap) roaring64_bitmap_free(self->bitmap);
+  self->bitmap = r;
+  self->invalidate();
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_getDeserializationSizeStatic(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  if (info.Length() < 1) return v8utils::throwError(isolate, "RoaringBitmap64.getDeserializationSize expects 1 argument");
+  const uint8_t * data;
+  size_t len;
+  if (!RoaringBitmap64_serialization_internal::extractBuffer(isolate, info[0], &data, &len)) return;
+  size_t s = roaring64_bitmap_portable_deserialize_size(reinterpret_cast<const char *>(data), len);
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, (uint64_t)s));
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_SERIALIZATION_H_
+
+#line 1 "src/cpp/RoaringBitmap64Iterator.h"
+#ifndef ROARING_NODE_ROARINGBITMAP64_ITERATOR_H_
+#define ROARING_NODE_ROARINGBITMAP64_ITERATOR_H_
+
+#line 6 "src/cpp/RoaringBitmap64Iterator.h"
+
+class RoaringBitmap64Iterator final : public ObjectWrap {
+ public:
+  static const constexpr uint64_t OBJECT_TOKEN = 0x21524F4152360010ULL;
+
+  roaring64_iterator_t * iter;
+  v8::Global<v8::Object> bitmapPersistent;
+  v8::Global<v8::Object> persistent;
+  bool exhausted;
+
+  explicit RoaringBitmap64Iterator(AddonData * addonData) :
+    ObjectWrap(addonData), iter(nullptr), exhausted(true) {}
+
+  ~RoaringBitmap64Iterator() {
+    if (this->iter) {
+      roaring64_iterator_free(this->iter);
+      this->iter = nullptr;
+    }
+    if (!this->persistent.IsEmpty()) this->persistent.ClearWeak();
+  }
+};
+
+inline void RoaringBitmap64Iterator_WeakCallback(v8::WeakCallbackInfo<RoaringBitmap64Iterator> const & info) {
+  auto * p = info.GetParameter();
+  if (p) {
+    p->~RoaringBitmap64Iterator();
+    bare_aligned_free(p);
+  }
+}
+
+inline void RoaringBitmap64Iterator_New(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+
+  if (!info.IsConstructCall()) {
+    auto cons = addonData->RoaringBitmap64Iterator_constructor.Get(isolate);
+    v8::Local<v8::Value> argv[1] = {info.Length() > 0 ? info[0] : v8::Undefined(isolate).As<v8::Value>()};
+    v8::MaybeLocal<v8::Object> v = cons->NewInstance(isolate->GetCurrentContext(), 1, argv);
+    v8::Local<v8::Object> vlocal;
+    if (v.ToLocal(&vlocal)) info.GetReturnValue().Set(vlocal);
+    return;
+  }
+
+  RoaringBitmap64 * parent = info.Length() > 0
+    ? ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate)
+    : nullptr;
+  if (parent == nullptr || parent->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64Iterator requires a non-disposed RoaringBitmap64");
+  }
+
+  auto holder = info.This();
+  auto * mem = bare_aligned_malloc(32, sizeof(RoaringBitmap64Iterator));
+  if (mem == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64Iterator: allocation failed");
+  }
+  auto * instance = new (mem) RoaringBitmap64Iterator(addonData);
+  instance->iter = roaring64_iterator_create(parent->bitmap);
+  instance->exhausted = !roaring64_iterator_has_value(instance->iter);
+
+  int indices[2] = {0, 1};
+  void * values[2] = {instance, (void *)(RoaringBitmap64Iterator::OBJECT_TOKEN)};
+  holder->SetAlignedPointerInInternalFields(2, indices, values);
+
+  instance->persistent.Reset(isolate, holder);
+  instance->persistent.SetWeak(instance, RoaringBitmap64Iterator_WeakCallback, v8::WeakCallbackType::kParameter);
+  instance->bitmapPersistent.Reset(isolate, info[0].As<v8::Object>());
+
+  info.GetReturnValue().Set(holder);
+}
+
+inline void RoaringBitmap64Iterator_next(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  auto context = isolate->GetCurrentContext();
+  RoaringBitmap64Iterator * self = ObjectWrap::TryUnwrap<RoaringBitmap64Iterator>(info.This(), isolate);
+  if (self == nullptr) return v8utils::throwError(isolate, "RoaringBitmap64Iterator: invalid this");
+
+  if (!self->bitmapPersistent.IsEmpty()) {
+    v8::Local<v8::Object> parentObj = self->bitmapPersistent.Get(isolate);
+    RoaringBitmap64 * parent = ObjectWrap::TryUnwrap<RoaringBitmap64>(parentObj, isolate);
+    if (parent == nullptr || parent->disposed) {
+      return v8utils::throwError(isolate, "RoaringBitmap64Iterator: parent is disposed");
+    }
+  }
+
+  v8::Local<v8::Object> result = v8::Object::New(isolate);
+  auto valueKey = v8::String::NewFromUtf8Literal(isolate, "value", v8::NewStringType::kInternalized);
+  auto doneKey = v8::String::NewFromUtf8Literal(isolate, "done", v8::NewStringType::kInternalized);
+
+  if (self->exhausted || self->iter == nullptr || !roaring64_iterator_has_value(self->iter)) {
+    ignoreMaybeResult(result->Set(context, valueKey, v8::Undefined(isolate)));
+    ignoreMaybeResult(result->Set(context, doneKey, v8::Boolean::New(isolate, true)));
+    self->exhausted = true;
+    info.GetReturnValue().Set(result);
+    return;
+  }
+
+  uint64_t v = roaring64_iterator_value(self->iter);
+  ignoreMaybeResult(result->Set(context, valueKey, v8::BigInt::NewFromUnsigned(isolate, v)));
+  ignoreMaybeResult(result->Set(context, doneKey, v8::Boolean::New(isolate, false)));
+  if (!roaring64_iterator_advance(self->iter)) {
+    self->exhausted = true;
+  }
+  info.GetReturnValue().Set(result);
+}
+
+inline void RoaringBitmap64Iterator_self(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64Iterator_Init(v8::Local<v8::Object> exports, AddonData * addonData) {
+  v8::Isolate * isolate = addonData->isolate;
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  v8::Local<v8::String> className = addonData->strings.RoaringBitmap64Iterator.Get(isolate);
+
+  v8::Local<v8::FunctionTemplate> ctor =
+    v8::FunctionTemplate::New(isolate, RoaringBitmap64Iterator_New, addonData->external.Get(isolate));
+  if (ctor.IsEmpty()) return;
+  addonData->RoaringBitmap64Iterator_constructorTemplate.Reset(isolate, ctor);
+
+  ctor->SetClassName(className);
+  ctor->InstanceTemplate()->SetInternalFieldCount(2);
+  ctor->PrototypeTemplate()->Set(v8::Symbol::GetToStringTag(isolate), className);
+
+  NODE_SET_PROTOTYPE_METHOD(ctor, "next", RoaringBitmap64Iterator_next);
+
+  ctor->PrototypeTemplate()->Set(
+    v8::Symbol::GetIterator(isolate),
+    v8::FunctionTemplate::New(isolate, RoaringBitmap64Iterator_self));
+
+  auto ctorFunction = ctor->GetFunction(context).ToLocalChecked();
+  ignoreMaybeResult(exports->Set(context, className, ctorFunction));
+  addonData->RoaringBitmap64Iterator_constructor.Reset(isolate, ctorFunction);
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_ITERATOR_H_
+
+#line 12 "src/cpp/RoaringBitmap64-main.h"
+
+inline void RoaringBitmap64_WeakCallback(v8::WeakCallbackInfo<RoaringBitmap64> const & info) {
+  RoaringBitmap64 * p = info.GetParameter();
+  if (p != nullptr) {
+    p->~RoaringBitmap64();
+    bare_aligned_free(p);
+  }
+}
+
+inline void RoaringBitmap64_New(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) {
+    return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  }
+
+  if (!info.IsConstructCall()) {
+    v8::Local<v8::Function> cons = addonData->RoaringBitmap64_constructor.Get(isolate);
+    v8::MaybeLocal<v8::Object> v;
+    if (info.Length() < 1) {
+      v = cons->NewInstance(isolate->GetCurrentContext(), 0, nullptr);
+    } else {
+      v8::Local<v8::Value> argv[1] = {info[0]};
+      v = cons->NewInstance(isolate->GetCurrentContext(), 1, argv);
+    }
+    v8::Local<v8::Object> vlocal;
+    if (v.ToLocal(&vlocal)) {
+      info.GetReturnValue().Set(vlocal);
+    }
+    return;
+  }
+
+  auto holder = info.This();
+  auto * mem = bare_aligned_malloc(32, sizeof(RoaringBitmap64));
+  if (mem == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64::ctor - allocation failed");
+  }
+  RoaringBitmap64 * instance = new (mem) RoaringBitmap64(addonData);
+  if (instance->bitmap == nullptr) {
+    instance->~RoaringBitmap64();
+    bare_aligned_free(instance);
+    return v8utils::throwError(isolate, "RoaringBitmap64::ctor - failed to create instance");
+  }
+
+  int indices[2] = {0, 1};
+  void * values[2] = {instance, (void *)(RoaringBitmap64::OBJECT_TOKEN)};
+  holder->SetAlignedPointerInInternalFields(2, indices, values);
+
+  instance->persistent.Reset(isolate, holder);
+  instance->persistent.SetWeak(instance, RoaringBitmap64_WeakCallback, v8::WeakCallbackType::kParameter);
+
+  if (info.Length() != 0 && !info[0]->IsUndefined() && !info[0]->IsNull()) {
+    // If the argument is itself a RoaringBitmap64 instance, skip addMany —
+    // the caller (typically clone) will copy the bitmap manually after
+    // construction. addMany only handles BigUint64Array / Iterable<bigint>.
+    RoaringBitmap64 * sourceRB64 = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+    if (sourceRB64 == nullptr) {
+      RoaringBitmap64_addMany(info);
+    }
+  }
+
+  info.GetReturnValue().Set(holder);
+}
+
+// ---- Element ops ----
+
+inline void RoaringBitmap64_add(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.add expects 1 argument");
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  roaring64_bitmap_add(self->bitmap, v);
+  self->invalidate();
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_tryAdd(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.tryAdd expects 1 argument");
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  bool inserted = roaring64_bitmap_add_checked(self->bitmap, v);
+  if (inserted) self->invalidate();
+  info.GetReturnValue().Set(inserted);
+}
+
+inline void RoaringBitmap64_remove(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.remove expects 1 argument");
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  roaring64_bitmap_remove(self->bitmap, v);
+  self->invalidate();
+  info.GetReturnValue().Set(info.This());
+}
+
+inline void RoaringBitmap64_delete(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.delete expects 1 argument");
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  bool removed = roaring64_bitmap_remove_checked(self->bitmap, v);
+  if (removed) self->invalidate();
+  info.GetReturnValue().Set(removed);
+}
+
+inline void RoaringBitmap64_has(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (info.Length() < 1) {
+    info.GetReturnValue().Set(false);
+    return;
+  }
+  uint64_t v;
+  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
+  info.GetReturnValue().Set(roaring64_bitmap_contains(self->bitmap, v));
+}
+
+inline void RoaringBitmap64_clear(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  roaring64_bitmap_clear(self->bitmap);
+  self->invalidate();
+}
+
+// ---- Property getters ----
+
+inline void RoaringBitmap64_size_getter(
+  v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  uint64_t s = (self == nullptr || self->disposed) ? 0 : self->getSize();
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, s));
+}
+
+inline void RoaringBitmap64_isEmpty_getter(
+  v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  info.GetReturnValue().Set(self == nullptr || self->disposed ? true : self->isEmpty());
+}
+
+inline void RoaringBitmap64_isDisposed_getter(
+  v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  info.GetReturnValue().Set(self == nullptr ? true : self->disposed);
+}
+
+// ---- min / max / clone ----
+
+inline void RoaringBitmap64_minimum(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (self->isEmpty()) {
+    info.GetReturnValue().SetUndefined();
+    return;
+  }
+  uint64_t m = roaring64_bitmap_minimum(self->bitmap);
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, m));
+}
+
+inline void RoaringBitmap64_maximum(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  if (self->isEmpty()) {
+    info.GetReturnValue().SetUndefined();
+    return;
+  }
+  uint64_t m = roaring64_bitmap_maximum(self->bitmap);
+  info.GetReturnValue().Set(v8::BigInt::NewFromUnsigned(isolate, m));
+}
+
+inline void RoaringBitmap64_clone(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) {
+    return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  }
+  AddonData * addonData = self->addonData;
+  v8::Local<v8::Function> cons = addonData->RoaringBitmap64_constructor.Get(isolate);
+  v8::Local<v8::Value> argv[1] = {info.This()};
+  v8::Local<v8::Object> newObj;
+  if (!cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&newObj)) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.clone failed to create instance");
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(newObj, isolate);
+  if (other == nullptr) {
+    return v8utils::throwError(isolate, "RoaringBitmap64.clone failed to create instance");
+  }
+
+  if (other->bitmap) roaring64_bitmap_free(other->bitmap);
+  other->bitmap = roaring64_bitmap_copy(self->bitmap);
+  other->invalidate();
+  info.GetReturnValue().Set(newObj);
+}
+
+// ---- Comparisons ----
+
+namespace RoaringBitmap64_main_internal {
+inline RoaringBitmap64 * unwrapOther(
+  v8::Isolate * isolate, const v8::FunctionCallbackInfo<v8::Value> & info, const char * methodName) {
+  if (info.Length() < 1) {
+    auto msg = std::string(methodName) + " expects a RoaringBitmap64 argument";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return nullptr;
+  }
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other == nullptr || other->disposed) {
+    auto msg = std::string(methodName) + " argument must be a non-disposed RoaringBitmap64";
+    isolate->ThrowException(v8::Exception::TypeError(
+      v8::String::NewFromUtf8(isolate, msg.c_str(), v8::NewStringType::kNormal).ToLocalChecked()));
+    return nullptr;
+  }
+  return other;
+}
+}  // namespace RoaringBitmap64_main_internal
+
+inline void RoaringBitmap64_equals(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.equals");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(roaring64_bitmap_equals(self->bitmap, other->bitmap));
+}
+
+inline void RoaringBitmap64_isSubset(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isSubset");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(roaring64_bitmap_is_subset(self->bitmap, other->bitmap));
+}
+
+inline void RoaringBitmap64_isStrictSubset(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  const RoaringBitmap64 * self = ObjectWrap::TryUnwrap<const RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr || self->disposed) return v8utils::throwError(isolate, "RoaringBitmap64 is disposed");
+  RoaringBitmap64 * other = RoaringBitmap64_main_internal::unwrapOther(isolate, info, "RoaringBitmap64.isStrictSubset");
+  if (other == nullptr) return;
+  info.GetReturnValue().Set(roaring64_bitmap_is_strict_subset(self->bitmap, other->bitmap));
+}
+
+// ---- Dispose ----
+
+inline void RoaringBitmap64_dispose(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  RoaringBitmap64 * self = ObjectWrap::TryUnwrap<RoaringBitmap64>(info.This(), isolate);
+  if (self == nullptr) return;
+  if (self->disposed) return;
+  self->disposed = true;
+  if (self->bitmap != nullptr) {
+    roaring64_bitmap_free(self->bitmap);
+    self->bitmap = nullptr;
+  }
+  self->invalidate();
+}
+
+// ---- Symbol.iterator ----
+
+inline void RoaringBitmap64_SymbolIterator(const v8::FunctionCallbackInfo<v8::Value> & info) {
+  v8::Isolate * isolate = info.GetIsolate();
+  AddonData * addonData = AddonData::get(info);
+  if (addonData == nullptr) return v8utils::throwError(isolate, ERROR_INVALID_OBJECT);
+  auto cons = addonData->RoaringBitmap64Iterator_constructor.Get(isolate);
+  v8::Local<v8::Value> argv[1] = {info.This()};
+  v8::Local<v8::Object> obj;
+  if (cons->NewInstance(isolate->GetCurrentContext(), 1, argv).ToLocal(&obj)) {
+    info.GetReturnValue().Set(obj);
+  }
+}
+
+// ---- Init ----
+
+inline void RoaringBitmap64_Init(v8::Local<v8::Object> exports, AddonData * addonData) {
+  v8::Isolate * isolate = addonData->isolate;
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+
+  v8::Local<v8::String> className = addonData->strings.RoaringBitmap64.Get(isolate);
+
+  v8::Local<v8::FunctionTemplate> ctor =
+    v8::FunctionTemplate::New(isolate, RoaringBitmap64_New, addonData->external.Get(isolate));
+  if (ctor.IsEmpty()) return;
+  addonData->RoaringBitmap64_constructorTemplate.Reset(isolate, ctor);
+
+  v8::Local<v8::ObjectTemplate> ctorInstanceTemplate = ctor->InstanceTemplate();
+  ctor->SetClassName(className);
+  ctorInstanceTemplate->SetInternalFieldCount(2);
+
+  ctor->PrototypeTemplate()->Set(v8::Symbol::GetToStringTag(isolate), className);
+
+  ctorInstanceTemplate->SetNativeDataProperty(
+    NEW_LITERAL_V8_STRING(isolate, "size", v8::NewStringType::kInternalized),
+    RoaringBitmap64_size_getter,
+    nullptr,
+    v8::Local<v8::Value>(),
+    (v8::PropertyAttribute)(v8::ReadOnly),
+    v8::SideEffectType::kHasNoSideEffect);
+
+  ctorInstanceTemplate->SetNativeDataProperty(
+    NEW_LITERAL_V8_STRING(isolate, "isEmpty", v8::NewStringType::kInternalized),
+    RoaringBitmap64_isEmpty_getter,
+    nullptr,
+    v8::Local<v8::Value>(),
+    (v8::PropertyAttribute)(v8::ReadOnly),
+    v8::SideEffectType::kHasNoSideEffect);
+
+  ctorInstanceTemplate->SetNativeDataProperty(
+    NEW_LITERAL_V8_STRING(isolate, "isDisposed", v8::NewStringType::kInternalized),
+    RoaringBitmap64_isDisposed_getter,
+    nullptr,
+    v8::Local<v8::Value>(),
+    (v8::PropertyAttribute)(v8::ReadOnly),
+    v8::SideEffectType::kHasNoSideEffect);
+
+  // Element ops
+  NODE_SET_PROTOTYPE_METHOD(ctor, "add", RoaringBitmap64_add);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "tryAdd", RoaringBitmap64_tryAdd);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "remove", RoaringBitmap64_remove);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "delete", RoaringBitmap64_delete);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "has", RoaringBitmap64_has);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "contains", RoaringBitmap64_has);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "includes", RoaringBitmap64_has);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "clear", RoaringBitmap64_clear);
+
+  // Min/max/clone
+  NODE_SET_PROTOTYPE_METHOD(ctor, "minimum", RoaringBitmap64_minimum);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "maximum", RoaringBitmap64_maximum);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "clone", RoaringBitmap64_clone);
+
+  // Comparisons
+  NODE_SET_PROTOTYPE_METHOD(ctor, "equals", RoaringBitmap64_equals);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "isSubset", RoaringBitmap64_isSubset);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "isStrictSubset", RoaringBitmap64_isStrictSubset);
+
+  // Bulk
+  NODE_SET_PROTOTYPE_METHOD(ctor, "addMany", RoaringBitmap64_addMany);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "removeMany", RoaringBitmap64_removeMany);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "toUint64Array", RoaringBitmap64_toUint64Array);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "toArray", RoaringBitmap64_toArray);
+
+  // In-place set ops
+  NODE_SET_PROTOTYPE_METHOD(ctor, "andInPlace", RoaringBitmap64_andInPlace);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "orInPlace", RoaringBitmap64_orInPlace);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "xorInPlace", RoaringBitmap64_xorInPlace);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "andNotInPlace", RoaringBitmap64_andNotInPlace);
+
+  // Serialization
+  NODE_SET_PROTOTYPE_METHOD(ctor, "serialize", RoaringBitmap64_serialize);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "getSerializationSizeInBytes", RoaringBitmap64_getSerializationSizeInBytes);
+  NODE_SET_PROTOTYPE_METHOD(ctor, "deserialize", RoaringBitmap64_deserializeInstance);
+
+  // Dispose
+  NODE_SET_PROTOTYPE_METHOD(ctor, "dispose", RoaringBitmap64_dispose);
+
+  // Symbol.iterator — pass addonData as Data so the callback can resolve it.
+  {
+    v8::Local<v8::FunctionTemplate> iterTpl =
+      v8::FunctionTemplate::New(isolate, RoaringBitmap64_SymbolIterator, addonData->external.Get(isolate));
+    ctor->PrototypeTemplate()->Set(v8::Symbol::GetIterator(isolate), iterTpl);
+  }
+
+  auto ctorFunction = ctor->GetFunction(context).ToLocalChecked();
+  auto ctorObject = ctorFunction->ToObject(context).ToLocalChecked();
+
+  // Static set ops
+  addonData->setMethod(ctorObject, "and", RoaringBitmap64_andStatic);
+  addonData->setMethod(ctorObject, "or", RoaringBitmap64_orStatic);
+  addonData->setMethod(ctorObject, "xor", RoaringBitmap64_xorStatic);
+  addonData->setMethod(ctorObject, "andNot", RoaringBitmap64_andNotStatic);
+  addonData->setMethod(ctorObject, "andCardinality", RoaringBitmap64_andCardinalityStatic);
+  addonData->setMethod(ctorObject, "orCardinality", RoaringBitmap64_orCardinalityStatic);
+  addonData->setMethod(ctorObject, "xorCardinality", RoaringBitmap64_xorCardinalityStatic);
+  addonData->setMethod(ctorObject, "andNotCardinality", RoaringBitmap64_andNotCardinalityStatic);
+  addonData->setMethod(ctorObject, "jaccardIndex", RoaringBitmap64_jaccardIndexStatic);
+
+  // Static deserialize
+  addonData->setMethod(ctorObject, "deserialize", RoaringBitmap64_deserializeStatic);
+  addonData->setMethod(ctorObject, "getDeserializationSize", RoaringBitmap64_getDeserializationSizeStatic);
+
+  ignoreMaybeResult(exports->Set(context, className, ctorFunction));
+  addonData->RoaringBitmap64_constructor.Reset(isolate, ctorFunction);
+}
+
+#endif  // ROARING_NODE_ROARINGBITMAP64_MAIN_H_
+
+#line 5 "src/cpp/main.cpp"
 
 using namespace v8;
 
@@ -16073,6 +17248,8 @@ void InitRoaringNode(Local<Object> exports) {
   AlignedBuffers_Init(exports, addonData);
   RoaringBitmap32_Init(exports, addonData);
   RoaringBitmap32BufferedIterator_Init(exports, addonData);
+  RoaringBitmap64Iterator_Init(exports, addonData);
+  RoaringBitmap64_Init(exports, addonData);
 
   addonData->setMethod(exports, "getRoaringUsedMemory", getRoaringUsedMemory);
 
@@ -31218,7 +32395,5368 @@ bool ra_portable_deserialize(roaring_array_t *answer, const char *buf,
 }  // extern "C" { namespace roaring { namespace internal {
 #endif
 
-#line 47 "src/cpp/croaring.cpp"
+#line 1 "submodules/CRoaring/src/art/art.c"
+#include <assert.h>
+#include <stdalign.h>
+#include <stdio.h>
+#include <string.h>
+
+#line 1 "submodules/CRoaring/include/roaring/art/art.h"
+#ifndef ART_ART_H
+#define ART_ART_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/*
+ * This file contains an implementation of an Adaptive Radix Tree as described
+ * in https://db.in.tum.de/~leis/papers/ART.pdf.
+ *
+ * The ART contains the keys in _byte lexographical_ order.
+ *
+ * Other features:
+ *  * Fixed 48 bit key length: all keys are assumed to be be 48 bits in size.
+ *    This allows us to put the key and key prefixes directly in nodes, reducing
+ *    indirection at no additional memory overhead.
+ *  * Key compression: the only inner nodes created are at points where key
+ *    chunks _differ_. This means that if there are two entries with different
+ *    high 48 bits, then there is only one inner node containing the common key
+ *    prefix, and two leaves.
+ *  * Mostly pointer-free: nodes are referred to by index rather than pointer,
+ *    so that the structure can be deserialized with a backing buffer.
+ */
+
+// Fixed length of keys in the ART. All keys are assumed to be of this length.
+#define ART_KEY_BYTES 6
+
+#ifdef __cplusplus
+extern "C" {
+namespace roaring {
+namespace internal {
+#endif
+
+typedef uint8_t art_key_chunk_t;
+
+// Internal node reference type. Contains the node typecode in the low 8 bits,
+// and the index in the relevant node array in the high 48 bits. Has a value of
+// CROARING_ART_NULL_REF when pointing to a non-existent node.
+typedef uint64_t art_ref_t;
+
+typedef void art_node_t;
+
+/**
+ * The ART is empty when root is a null ref.
+ *
+ * Each node type has its own dynamic array of node structs, indexed by
+ * art_ref_t. The arrays are expanded as needed, and shrink only when
+ * `shrink_to_fit` is called.
+ */
+typedef struct art_s {
+    art_ref_t root;
+
+    // Indexed by node typecode, thus 1 larger than they need to be for
+    // convenience. `first_free` indicates the index where the first free node
+    // lives, which may be equal to the capacity.
+    uint64_t first_free[6];
+    uint64_t capacities[6];
+    art_node_t *nodes[6];
+} art_t;
+
+typedef uint64_t art_val_t;
+
+/**
+ * Compares two keys, returns their relative order:
+ *  * Key 1 <  key 2: returns a negative value
+ *  * Key 1 == key 2: returns 0
+ *  * Key 1 >  key 2: returns a positive value
+ */
+int art_compare_keys(const art_key_chunk_t key1[],
+                     const art_key_chunk_t key2[]);
+
+/**
+ * Initializes the ART.
+ */
+void art_init_cleared(art_t *art);
+
+/**
+ * Inserts the given key and value. Returns a pointer to the value inserted,
+ * valid as long as the ART is not modified.
+ */
+art_val_t *art_insert(art_t *art, const art_key_chunk_t *key, art_val_t val);
+
+/**
+ * Returns true if a value was erased. Sets `*erased_val` to the value erased,
+ * if any.
+ */
+bool art_erase(art_t *art, const art_key_chunk_t *key, art_val_t *erased_val);
+
+/**
+ * Returns the value associated with the given key, NULL if not found.
+ */
+art_val_t *art_find(const art_t *art, const art_key_chunk_t *key);
+
+/**
+ * Returns true if the ART is empty.
+ */
+bool art_is_empty(const art_t *art);
+
+/**
+ * Frees the contents of the ART. Should not be called when using
+ * `art_deserialize_frozen_safe`.
+ */
+void art_free(art_t *art);
+
+/**
+ * Prints the ART using printf, useful for debugging.
+ */
+void art_printf(const art_t *art);
+
+/**
+ * Callback for validating the value stored in a leaf. `context` is a
+ * user-provided value passed to the callback without modification.
+ *
+ * Should return true if the value is valid, false otherwise
+ * If false is returned, `*reason` should be set to a static string describing
+ * the reason for the failure.
+ */
+typedef bool (*art_validate_cb_t)(const art_val_t val, const char **reason,
+                                  void *context);
+
+/**
+ * Validate the ART tree, ensuring it is internally consistent. `context` is a
+ * user-provided value passed to the callback without modification.
+ */
+bool art_internal_validate(const art_t *art, const char **reason,
+                           art_validate_cb_t validate_cb, void *context);
+
+/**
+ * ART-internal iterator bookkeeping. Users should treat this as an opaque type.
+ */
+typedef struct art_iterator_frame_s {
+    art_ref_t ref;
+    uint8_t index_in_node;
+} art_iterator_frame_t;
+
+/**
+ * Users should only access `key` and `value` in iterators. The iterator is
+ * valid when `value != NULL`.
+ */
+typedef struct art_iterator_s {
+    art_key_chunk_t key[ART_KEY_BYTES];
+    art_val_t *value;
+
+    art_t *art;
+
+    uint8_t depth;  // Key depth
+    uint8_t frame;  // Node depth
+
+    // State for each node in the ART the iterator has travelled from the root.
+    // This is `ART_KEY_BYTES + 1` because it includes state for the leaf too.
+    art_iterator_frame_t frames[ART_KEY_BYTES + 1];
+} art_iterator_t;
+
+/**
+ * Creates an iterator initialzed to the first or last entry in the ART,
+ * depending on `first`. The iterator is not valid if there are no entries in
+ * the ART.
+ */
+art_iterator_t art_init_iterator(art_t *art, bool first);
+
+/**
+ * Returns an initialized iterator positioned at a key equal to or greater than
+ * the given key, if it exists.
+ */
+art_iterator_t art_lower_bound(art_t *art, const art_key_chunk_t *key);
+
+/**
+ * Returns an initialized iterator positioned at a key greater than the given
+ * key, if it exists.
+ */
+art_iterator_t art_upper_bound(art_t *art, const art_key_chunk_t *key);
+
+/**
+ * The following iterator movement functions return true if a new entry was
+ * encountered.
+ */
+bool art_iterator_move(art_iterator_t *iterator, bool forward);
+bool art_iterator_next(art_iterator_t *iterator);
+bool art_iterator_prev(art_iterator_t *iterator);
+
+/**
+ * Moves the iterator forward to a key equal to or greater than the given key.
+ */
+bool art_iterator_lower_bound(art_iterator_t *iterator,
+                              const art_key_chunk_t *key);
+
+/**
+ * Insert the value and positions the iterator at the key.
+ */
+void art_iterator_insert(art_iterator_t *iterator, const art_key_chunk_t *key,
+                         art_val_t val);
+
+/**
+ * Erase the value pointed at by the iterator. Moves the iterator to the next
+ * leaf.
+ * Returns true if a value was erased. Sets `*erased_val` to the value erased,
+ * if any.
+ */
+bool art_iterator_erase(art_iterator_t *iterator, art_val_t *erased_val);
+
+/**
+ * Shrinks the internal arrays in the ART to remove any unused elements. Returns
+ * the number of bytes freed.
+ */
+size_t art_shrink_to_fit(art_t *art);
+
+/**
+ * Returns true if the ART has no unused elements.
+ */
+bool art_is_shrunken(const art_t *art);
+
+/**
+ * Returns the serialized size in bytes.
+ * Requires `art_shrink_to_fit` to be called first.
+ */
+size_t art_size_in_bytes(const art_t *art);
+
+/**
+ * Serializes the ART and returns the number of bytes written. Returns 0 on
+ * error. Requires `art_shrink_to_fit` to be called first.
+ */
+size_t art_serialize(const art_t *art, char *buf);
+
+/**
+ * Deserializes the ART from a serialized buffer, reading up to `maxbytes`
+ * bytes. Returns 0 on error. Requires `buf` to be 8 byte aligned.
+ *
+ * An ART deserialized in this way should only be used in a readonly context.The
+ * underlying buffer must not be freed before the ART. `art_free` should not be
+ * called on the ART deserialized in this way.
+ */
+size_t art_frozen_view(const char *buf, size_t maxbytes, art_t *art);
+
+#ifdef __cplusplus
+}  // extern "C"
+}  // namespace roaring
+}  // namespace internal
+#endif
+
+#endif
+
+#line 9 "submodules/CRoaring/src/art/art.c"
+
+#define CROARING_ART_NULL_REF 0
+
+#define CROARING_ART_LEAF_TYPE 1
+#define CROARING_ART_NODE4_TYPE 2
+#define CROARING_ART_NODE16_TYPE 3
+#define CROARING_ART_NODE48_TYPE 4
+#define CROARING_ART_NODE256_TYPE 5
+
+#define CROARING_ART_MIN_TYPE CROARING_ART_LEAF_TYPE
+#define CROARING_ART_MAX_TYPE CROARING_ART_NODE256_TYPE
+
+// Node48 placeholder value to indicate no child is present at this key index.
+#define CROARING_ART_NODE48_EMPTY_VAL 48
+#define CROARING_NODE48_AVAILABLE_CHILDREN_MASK ((UINT64_C(1) << 48) - 1)
+
+#define CROARING_ART_ALIGN_BUF(buf, alignment)      \
+    (char *)(((uintptr_t)(buf) + ((alignment)-1)) & \
+             (ptrdiff_t)(~((alignment)-1)))
+
+// Gives the byte difference needed to align the current buffer to the
+// alignment, relative to the start of the buffer.
+#define CROARING_ART_ALIGN_SIZE_RELATIVE(buf_cur, buf_start, alignment) \
+    ((((ptrdiff_t)((buf_cur) - (buf_start)) + ((alignment)-1)) &        \
+      (ptrdiff_t)(~((alignment)-1))) -                                  \
+     (ptrdiff_t)((buf_cur) - (buf_start)))
+
+#ifdef __cplusplus
+extern "C" {
+namespace roaring {
+namespace internal {
+#endif
+
+typedef uint8_t art_typecode_t;
+
+typedef struct art_leaf_s {
+    union {
+        struct {
+            art_key_chunk_t key[ART_KEY_BYTES];
+            art_val_t val;
+        };
+        uint64_t next_free;
+    };
+} art_leaf_t;
+
+// Inner node, with prefix.
+//
+// We use a fixed-length array as a pointer would be larger than the array.
+typedef struct art_inner_node_s {
+    uint8_t prefix_size;
+    uint8_t prefix[ART_KEY_BYTES - 1];
+} art_inner_node_t;
+
+// Inner node types.
+
+// Node4: key[i] corresponds with children[i]. Keys are sorted.
+typedef struct art_node4_s {
+    union {
+        struct {
+            art_inner_node_t base;
+            uint8_t count;
+            uint8_t keys[4];
+            art_ref_t children[4];
+        };
+        uint64_t next_free;
+    };
+} art_node4_t;
+
+// Node16: key[i] corresponds with children[i]. Keys are sorted.
+typedef struct art_node16_s {
+    union {
+        struct {
+            art_inner_node_t base;
+            uint8_t count;
+            uint8_t keys[16];
+            art_ref_t children[16];
+        };
+        uint64_t next_free;
+    };
+} art_node16_t;
+
+// Node48: key[i] corresponds with children[key[i]] if key[i] !=
+// CROARING_ART_NODE48_EMPTY_VAL. Keys are naturally sorted due to direct
+// indexing.
+typedef struct art_node48_s {
+    union {
+        struct {
+            art_inner_node_t base;
+            uint8_t count;
+            // Bitset where the ith bit is set if children[i] is available
+            // Because there are at most 48 children, only the bottom 48 bits
+            // are used.
+            uint64_t available_children;
+            uint8_t keys[256];
+            art_ref_t children[48];
+        };
+        uint64_t next_free;
+    };
+} art_node48_t;
+
+// Node256: children[i] is directly indexed by key chunk. A child is present if
+// children[i] != NULL.
+typedef struct art_node256_s {
+    union {
+        struct {
+            art_inner_node_t base;
+            uint16_t count;
+            art_ref_t children[256];
+        };
+        uint64_t next_free;
+    };
+} art_node256_t;
+
+// Size of each node type, indexed by typecode for convenience.
+static const size_t ART_NODE_SIZES[] = {
+    0,
+    sizeof(art_leaf_t),
+    sizeof(art_node4_t),
+    sizeof(art_node16_t),
+    sizeof(art_node48_t),
+    sizeof(art_node256_t),
+};
+
+// Helper struct to refer to a child within a node at a specific index.
+typedef struct art_indexed_child_s {
+    art_ref_t child;
+    uint8_t index;
+    art_key_chunk_t key_chunk;
+} art_indexed_child_t;
+
+typedef struct art_internal_validate_s {
+    const char **reason;
+    art_validate_cb_t validate_cb;
+    void *context;
+
+    int depth;
+    art_key_chunk_t current_key[ART_KEY_BYTES];
+} art_internal_validate_t;
+
+// Set the reason message, and return false for convenience.
+static inline bool art_validate_fail(const art_internal_validate_t *validate,
+                                     const char *msg) {
+    *validate->reason = msg;
+    return false;
+}
+
+static inline art_ref_t art_to_ref(uint64_t index, art_typecode_t typecode) {
+    return ((art_ref_t)index) << 16 | typecode;
+}
+
+static inline uint64_t art_ref_index(art_ref_t ref) {
+    return ((uint64_t)ref) >> 16;
+}
+
+static inline art_typecode_t art_ref_typecode(art_ref_t ref) {
+    return (art_typecode_t)ref;
+}
+
+/**
+ * Gets a pointer to a node from its reference. The pointer only remains valid
+ * under non-mutating operations. If any mutating operations occur, this
+ * function should be called again to get a valid pointer to the node.
+ */
+static art_node_t *art_deref(const art_t *art, art_ref_t ref) {
+    assert(ref != CROARING_ART_NULL_REF);
+    art_typecode_t typecode = art_ref_typecode(ref);
+    return (art_node_t *)((char *)art->nodes[typecode] +
+                          art_ref_index(ref) * ART_NODE_SIZES[typecode]);
+}
+
+static inline art_node_t *art_get_node(const art_t *art, uint64_t index,
+                                       art_typecode_t typecode) {
+    return art_deref(art, art_to_ref(index, typecode));
+}
+
+static inline uint64_t art_get_index(const art_t *art, const art_node_t *node,
+                                     art_typecode_t typecode) {
+    art_node_t *nodes = art->nodes[typecode];
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return (art_leaf_t *)node - (art_leaf_t *)nodes;
+        case CROARING_ART_NODE4_TYPE:
+            return (art_node4_t *)node - (art_node4_t *)nodes;
+        case CROARING_ART_NODE16_TYPE:
+            return (art_node16_t *)node - (art_node16_t *)nodes;
+        case CROARING_ART_NODE48_TYPE:
+            return (art_node48_t *)node - (art_node48_t *)nodes;
+        case CROARING_ART_NODE256_TYPE:
+            return (art_node256_t *)node - (art_node256_t *)nodes;
+        default:
+            assert(false);
+            return 0;
+    }
+}
+
+/**
+ * Creates a reference from a pointer.
+ */
+static inline art_ref_t art_get_ref(const art_t *art, const art_node_t *node,
+                                    art_typecode_t typecode) {
+    return art_to_ref(art_get_index(art, node, typecode), typecode);
+}
+
+static inline bool art_is_leaf(art_ref_t ref) {
+    return art_ref_typecode(ref) == CROARING_ART_LEAF_TYPE;
+}
+
+static inline void art_init_inner_node(art_inner_node_t *node,
+                                       const art_key_chunk_t prefix[],
+                                       uint8_t prefix_size) {
+    node->prefix_size = prefix_size;
+    memcpy(node->prefix, prefix, prefix_size * sizeof(art_key_chunk_t));
+}
+
+static void art_node_free(art_t *art, art_node_t *node,
+                          art_typecode_t typecode);
+
+static uint64_t art_allocate_index(art_t *art, art_typecode_t typecode);
+
+// ===================== Start of node-specific functions ======================
+
+static art_ref_t art_leaf_create(art_t *art, const art_key_chunk_t key[],
+                                 art_val_t val) {
+    uint64_t index = art_allocate_index(art, CROARING_ART_LEAF_TYPE);
+    art_leaf_t *leaf =
+        ((art_leaf_t *)art->nodes[CROARING_ART_LEAF_TYPE]) + index;
+    memcpy(leaf->key, key, ART_KEY_BYTES);
+    leaf->val = val;
+    return art_to_ref(index, CROARING_ART_LEAF_TYPE);
+}
+
+static art_node4_t *art_node4_create(art_t *art, const art_key_chunk_t prefix[],
+                                     uint8_t prefix_size);
+static art_node16_t *art_node16_create(art_t *art,
+                                       const art_key_chunk_t prefix[],
+                                       uint8_t prefix_size);
+static art_node48_t *art_node48_create(art_t *art,
+                                       const art_key_chunk_t prefix[],
+                                       uint8_t prefix_size);
+static art_node256_t *art_node256_create(art_t *art,
+                                         const art_key_chunk_t prefix[],
+                                         uint8_t prefix_size);
+
+static art_ref_t art_node4_insert(art_t *art, art_node4_t *node,
+                                  art_ref_t child, uint8_t key);
+static art_ref_t art_node16_insert(art_t *art, art_node16_t *node,
+                                   art_ref_t child, uint8_t key);
+static art_ref_t art_node48_insert(art_t *art, art_node48_t *node,
+                                   art_ref_t child, uint8_t key);
+static art_ref_t art_node256_insert(art_t *art, art_node256_t *node,
+                                    art_ref_t child, uint8_t key);
+
+static art_node4_t *art_node4_create(art_t *art, const art_key_chunk_t prefix[],
+                                     uint8_t prefix_size) {
+    uint64_t index = art_allocate_index(art, CROARING_ART_NODE4_TYPE);
+    art_node4_t *node =
+        ((art_node4_t *)art->nodes[CROARING_ART_NODE4_TYPE]) + index;
+    art_init_inner_node(&node->base, prefix, prefix_size);
+    node->count = 0;
+    return node;
+}
+
+static inline art_ref_t art_node4_find_child(const art_node4_t *node,
+                                             art_key_chunk_t key) {
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key) {
+            return node->children[i];
+        }
+    }
+    return CROARING_ART_NULL_REF;
+}
+
+static art_ref_t art_node4_insert(art_t *art, art_node4_t *node,
+                                  art_ref_t child, uint8_t key) {
+    if (node->count < 4) {
+        size_t idx = 0;
+        for (; idx < node->count; ++idx) {
+            if (node->keys[idx] > key) {
+                break;
+            }
+        }
+        size_t after = node->count - idx;
+        // Shift other keys to maintain sorted order.
+        memmove(node->keys + idx + 1, node->keys + idx,
+                after * sizeof(art_key_chunk_t));
+        memmove(node->children + idx + 1, node->children + idx,
+                after * sizeof(art_ref_t));
+
+        node->children[idx] = child;
+        node->keys[idx] = key;
+        node->count++;
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE4_TYPE);
+    }
+    art_node16_t *new_node =
+        art_node16_create(art, node->base.prefix, node->base.prefix_size);
+    // Instead of calling insert, this could be specialized to 2x memcpy and
+    // setting the count.
+    for (size_t i = 0; i < 4; ++i) {
+        art_node16_insert(art, new_node, node->children[i], node->keys[i]);
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE4_TYPE);
+    return art_node16_insert(art, new_node, child, key);
+}
+
+static inline art_ref_t art_node4_erase(art_t *art, art_node4_t *node,
+                                        art_key_chunk_t key_chunk) {
+    int idx = -1;
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key_chunk) {
+            idx = i;
+        }
+    }
+    if (idx == -1) {
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE4_TYPE);
+    }
+    if (node->count == 2) {
+        // Only one child remains after erasing, so compress the path by
+        // removing this node.
+        uint8_t other_idx = idx ^ 1;
+        art_ref_t remaining_child = node->children[other_idx];
+        art_key_chunk_t remaining_child_key = node->keys[other_idx];
+        if (!art_is_leaf(remaining_child)) {
+            // Correct the prefix of the child node.
+            art_inner_node_t *inner_node =
+                (art_inner_node_t *)art_deref(art, remaining_child);
+            memmove(inner_node->prefix + node->base.prefix_size + 1,
+                    inner_node->prefix, inner_node->prefix_size);
+            memcpy(inner_node->prefix, node->base.prefix,
+                   node->base.prefix_size);
+            inner_node->prefix[node->base.prefix_size] = remaining_child_key;
+            inner_node->prefix_size += node->base.prefix_size + 1;
+        }
+        art_node_free(art, (art_node_t *)node, CROARING_ART_NODE4_TYPE);
+        return remaining_child;
+    }
+    // Shift other keys to maintain sorted order.
+    size_t after_next = node->count - idx - 1;
+    memmove(node->keys + idx, node->keys + idx + 1,
+            after_next * sizeof(art_key_chunk_t));
+    memmove(node->children + idx, node->children + idx + 1,
+            after_next * sizeof(art_ref_t));
+    node->count--;
+    return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE4_TYPE);
+}
+
+static inline void art_node4_replace(art_node4_t *node,
+                                     art_key_chunk_t key_chunk,
+                                     art_ref_t new_child) {
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key_chunk) {
+            node->children[i] = new_child;
+            return;
+        }
+    }
+}
+
+static inline art_indexed_child_t art_node4_next_child(const art_node4_t *node,
+                                                       int index) {
+    art_indexed_child_t indexed_child;
+    index++;
+    if (index >= node->count) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node4_prev_child(const art_node4_t *node,
+                                                       int index) {
+    if (index > node->count) {
+        index = node->count;
+    }
+    index--;
+    art_indexed_child_t indexed_child;
+    if (index < 0) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node4_child_at(const art_node4_t *node,
+                                                     int index) {
+    art_indexed_child_t indexed_child;
+    if (index < 0 || index >= node->count) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node4_lower_bound(
+    art_node4_t *node, art_key_chunk_t key_chunk) {
+    art_indexed_child_t indexed_child;
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] >= key_chunk) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[i];
+            indexed_child.key_chunk = node->keys[i];
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static bool art_internal_validate_at(const art_t *art, art_ref_t ref,
+                                     art_internal_validate_t validator);
+
+static bool art_node4_internal_validate(const art_t *art,
+                                        const art_node4_t *node,
+                                        art_internal_validate_t validator) {
+    if (node->count == 0) {
+        return art_validate_fail(&validator, "Node4 has no children");
+    }
+    if (node->count > 4) {
+        return art_validate_fail(&validator, "Node4 has too many children");
+    }
+    if (node->count == 1) {
+        return art_validate_fail(
+            &validator, "Node4 and child node should have been combined");
+    }
+    validator.depth++;
+    for (int i = 0; i < node->count; ++i) {
+        if (i > 0) {
+            if (node->keys[i - 1] >= node->keys[i]) {
+                return art_validate_fail(
+                    &validator, "Node4 keys are not strictly increasing");
+            }
+        }
+        for (int j = i + 1; j < node->count; ++j) {
+            if (node->children[i] == node->children[j]) {
+                return art_validate_fail(&validator,
+                                         "Node4 has duplicate children");
+            }
+        }
+        validator.current_key[validator.depth - 1] = node->keys[i];
+        if (!art_internal_validate_at(art, node->children[i], validator)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static art_node16_t *art_node16_create(art_t *art,
+                                       const art_key_chunk_t prefix[],
+                                       uint8_t prefix_size) {
+    uint64_t index = art_allocate_index(art, CROARING_ART_NODE16_TYPE);
+    art_node16_t *node =
+        ((art_node16_t *)art->nodes[CROARING_ART_NODE16_TYPE]) + index;
+    art_init_inner_node(&node->base, prefix, prefix_size);
+    node->count = 0;
+    return node;
+}
+
+static inline art_ref_t art_node16_find_child(const art_node16_t *node,
+                                              art_key_chunk_t key) {
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key) {
+            return node->children[i];
+        }
+    }
+    return CROARING_ART_NULL_REF;
+}
+
+static art_ref_t art_node16_insert(art_t *art, art_node16_t *node,
+                                   art_ref_t child, uint8_t key) {
+    if (node->count < 16) {
+        size_t idx = 0;
+        for (; idx < node->count; ++idx) {
+            if (node->keys[idx] > key) {
+                break;
+            }
+        }
+        size_t after = node->count - idx;
+        // Shift other keys to maintain sorted order.
+        memmove(node->keys + idx + 1, node->keys + idx,
+                after * sizeof(art_key_chunk_t));
+        memmove(node->children + idx + 1, node->children + idx,
+                after * sizeof(art_ref_t));
+
+        node->children[idx] = child;
+        node->keys[idx] = key;
+        node->count++;
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE16_TYPE);
+    }
+    art_node48_t *new_node =
+        art_node48_create(art, node->base.prefix, node->base.prefix_size);
+    for (size_t i = 0; i < 16; ++i) {
+        art_node48_insert(art, new_node, node->children[i], node->keys[i]);
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE16_TYPE);
+    return art_node48_insert(art, new_node, child, key);
+}
+
+static inline art_ref_t art_node16_erase(art_t *art, art_node16_t *node,
+                                         uint8_t key_chunk) {
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key_chunk) {
+            // Shift other keys to maintain sorted order.
+            size_t after_next = node->count - i - 1;
+            memmove(node->keys + i, node->keys + i + 1,
+                    after_next * sizeof(key_chunk));
+            memmove(node->children + i, node->children + i + 1,
+                    after_next * sizeof(art_ref_t));
+            node->count--;
+            break;
+        }
+    }
+    if (node->count > 4) {
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE16_TYPE);
+    }
+    art_node4_t *new_node =
+        art_node4_create(art, node->base.prefix, node->base.prefix_size);
+    // Instead of calling insert, this could be specialized to 2x memcpy and
+    // setting the count.
+    for (size_t i = 0; i < 4; ++i) {
+        art_node4_insert(art, new_node, node->children[i], node->keys[i]);
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE16_TYPE);
+    return art_get_ref(art, (art_node_t *)new_node, CROARING_ART_NODE4_TYPE);
+}
+
+static inline void art_node16_replace(art_node16_t *node,
+                                      art_key_chunk_t key_chunk,
+                                      art_ref_t new_child) {
+    for (uint8_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] == key_chunk) {
+            node->children[i] = new_child;
+            return;
+        }
+    }
+}
+
+static inline art_indexed_child_t art_node16_next_child(
+    const art_node16_t *node, int index) {
+    art_indexed_child_t indexed_child;
+    index++;
+    if (index >= node->count) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node16_prev_child(
+    const art_node16_t *node, int index) {
+    if (index > node->count) {
+        index = node->count;
+    }
+    index--;
+    art_indexed_child_t indexed_child;
+    if (index < 0) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node16_child_at(const art_node16_t *node,
+                                                      int index) {
+    art_indexed_child_t indexed_child;
+    if (index < 0 || index >= node->count) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = node->keys[index];
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node16_lower_bound(
+    art_node16_t *node, art_key_chunk_t key_chunk) {
+    art_indexed_child_t indexed_child;
+    for (size_t i = 0; i < node->count; ++i) {
+        if (node->keys[i] >= key_chunk) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[i];
+            indexed_child.key_chunk = node->keys[i];
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static bool art_node16_internal_validate(const art_t *art,
+                                         const art_node16_t *node,
+                                         art_internal_validate_t validator) {
+    if (node->count <= 4) {
+        return art_validate_fail(&validator, "Node16 has too few children");
+    }
+    if (node->count > 16) {
+        return art_validate_fail(&validator, "Node16 has too many children");
+    }
+    validator.depth++;
+    for (int i = 0; i < node->count; ++i) {
+        if (i > 0) {
+            if (node->keys[i - 1] >= node->keys[i]) {
+                return art_validate_fail(
+                    &validator, "Node16 keys are not strictly increasing");
+            }
+        }
+        for (int j = i + 1; j < node->count; ++j) {
+            if (node->children[i] == node->children[j]) {
+                return art_validate_fail(&validator,
+                                         "Node16 has duplicate children");
+            }
+        }
+        validator.current_key[validator.depth - 1] = node->keys[i];
+        if (!art_internal_validate_at(art, node->children[i], validator)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static art_node48_t *art_node48_create(art_t *art,
+                                       const art_key_chunk_t prefix[],
+                                       uint8_t prefix_size) {
+    uint64_t index = art_allocate_index(art, CROARING_ART_NODE48_TYPE);
+    art_node48_t *node =
+        ((art_node48_t *)art->nodes[CROARING_ART_NODE48_TYPE]) + index;
+    art_init_inner_node(&node->base, prefix, prefix_size);
+    node->count = 0;
+    node->available_children = CROARING_NODE48_AVAILABLE_CHILDREN_MASK;
+    for (size_t i = 0; i < 256; ++i) {
+        node->keys[i] = CROARING_ART_NODE48_EMPTY_VAL;
+    }
+    return node;
+}
+
+static inline art_ref_t art_node48_find_child(const art_node48_t *node,
+                                              art_key_chunk_t key) {
+    uint8_t val_idx = node->keys[key];
+    if (val_idx != CROARING_ART_NODE48_EMPTY_VAL) {
+        return node->children[val_idx];
+    }
+    return CROARING_ART_NULL_REF;
+}
+
+static art_ref_t art_node48_insert(art_t *art, art_node48_t *node,
+                                   art_ref_t child, uint8_t key) {
+    if (node->count < 48) {
+        // node->available_children is only zero when the node is full (count ==
+        // 48), we just checked count < 48
+        uint8_t val_idx = roaring_trailing_zeroes(node->available_children);
+        node->keys[key] = val_idx;
+        node->children[val_idx] = child;
+        node->count++;
+        node->available_children &= ~(UINT64_C(1) << val_idx);
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE48_TYPE);
+    }
+    art_node256_t *new_node =
+        art_node256_create(art, node->base.prefix, node->base.prefix_size);
+    for (size_t i = 0; i < 256; ++i) {
+        uint8_t val_idx = node->keys[i];
+        if (val_idx != CROARING_ART_NODE48_EMPTY_VAL) {
+            art_node256_insert(art, new_node, node->children[val_idx], i);
+        }
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE48_TYPE);
+    return art_node256_insert(art, new_node, child, key);
+}
+
+static inline art_ref_t art_node48_erase(art_t *art, art_node48_t *node,
+                                         uint8_t key_chunk) {
+    uint8_t val_idx = node->keys[key_chunk];
+    if (val_idx == CROARING_ART_NODE48_EMPTY_VAL) {
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE48_TYPE);
+    }
+    node->keys[key_chunk] = CROARING_ART_NODE48_EMPTY_VAL;
+    node->available_children |= UINT64_C(1) << val_idx;
+    node->count--;
+    if (node->count > 16) {
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE48_TYPE);
+    }
+
+    art_node16_t *new_node =
+        art_node16_create(art, node->base.prefix, node->base.prefix_size);
+    for (size_t i = 0; i < 256; ++i) {
+        val_idx = node->keys[i];
+        if (val_idx != CROARING_ART_NODE48_EMPTY_VAL) {
+            art_node16_insert(art, new_node, node->children[val_idx], i);
+        }
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE48_TYPE);
+    return art_get_ref(art, (art_node_t *)new_node, CROARING_ART_NODE16_TYPE);
+}
+
+static inline void art_node48_replace(art_node48_t *node,
+                                      art_key_chunk_t key_chunk,
+                                      art_ref_t new_child) {
+    uint8_t val_idx = node->keys[key_chunk];
+    assert(val_idx != CROARING_ART_NODE48_EMPTY_VAL);
+    node->children[val_idx] = new_child;
+}
+
+static inline art_indexed_child_t art_node48_next_child(
+    const art_node48_t *node, int index) {
+    art_indexed_child_t indexed_child;
+    index++;
+    for (size_t i = index; i < 256; ++i) {
+        if (node->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[node->keys[i]];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node48_prev_child(
+    const art_node48_t *node, int index) {
+    if (index > 256) {
+        index = 256;
+    }
+    index--;
+    art_indexed_child_t indexed_child;
+    for (int i = index; i >= 0; --i) {
+        if (node->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[node->keys[i]];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node48_child_at(const art_node48_t *node,
+                                                      int index) {
+    art_indexed_child_t indexed_child;
+    if (index < 0 || index >= 256) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[node->keys[index]];
+    indexed_child.key_chunk = index;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node48_lower_bound(
+    art_node48_t *node, art_key_chunk_t key_chunk) {
+    art_indexed_child_t indexed_child;
+    for (size_t i = key_chunk; i < 256; ++i) {
+        if (node->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[node->keys[i]];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static bool art_node48_internal_validate(const art_t *art,
+                                         const art_node48_t *node,
+                                         art_internal_validate_t validator) {
+    if (node->count <= 16) {
+        return art_validate_fail(&validator, "Node48 has too few children");
+    }
+    if (node->count > 48) {
+        return art_validate_fail(&validator, "Node48 has too many children");
+    }
+    uint64_t used_children = 0;
+    for (int i = 0; i < 256; ++i) {
+        uint8_t child_idx = node->keys[i];
+        if (child_idx != CROARING_ART_NODE48_EMPTY_VAL) {
+            if (used_children & (UINT64_C(1) << child_idx)) {
+                return art_validate_fail(
+                    &validator, "Node48 keys point to the same child index");
+            }
+
+            art_ref_t child = node->children[child_idx];
+            if (child == CROARING_ART_NULL_REF) {
+                return art_validate_fail(&validator, "Node48 has a NULL child");
+            }
+            used_children |= UINT64_C(1) << child_idx;
+        }
+    }
+    uint64_t expected_used_children =
+        (node->available_children) ^ CROARING_NODE48_AVAILABLE_CHILDREN_MASK;
+    if (used_children != expected_used_children) {
+        return art_validate_fail(
+            &validator,
+            "Node48 available_children does not match actual children");
+    }
+    while (used_children != 0) {
+        uint8_t child_idx = roaring_trailing_zeroes(used_children);
+        used_children &= used_children - 1;
+
+        uint64_t other_children = used_children;
+        while (other_children != 0) {
+            uint8_t other_child_idx = roaring_trailing_zeroes(other_children);
+            if (node->children[child_idx] == node->children[other_child_idx]) {
+                return art_validate_fail(&validator,
+                                         "Node48 has duplicate children");
+            }
+            other_children &= other_children - 1;
+        }
+    }
+
+    validator.depth++;
+    for (int i = 0; i < 256; ++i) {
+        if (node->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+            validator.current_key[validator.depth - 1] = i;
+            if (!art_internal_validate_at(art, node->children[node->keys[i]],
+                                          validator)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static art_node256_t *art_node256_create(art_t *art,
+                                         const art_key_chunk_t prefix[],
+                                         uint8_t prefix_size) {
+    uint64_t index = art_allocate_index(art, CROARING_ART_NODE256_TYPE);
+    art_node256_t *node =
+        ((art_node256_t *)art->nodes[CROARING_ART_NODE256_TYPE]) + index;
+    art_init_inner_node(&node->base, prefix, prefix_size);
+    node->count = 0;
+    for (size_t i = 0; i < 256; ++i) {
+        node->children[i] = CROARING_ART_NULL_REF;
+    }
+    return node;
+}
+
+static inline art_ref_t art_node256_find_child(const art_node256_t *node,
+                                               art_key_chunk_t key) {
+    return node->children[key];
+}
+
+static art_ref_t art_node256_insert(art_t *art, art_node256_t *node,
+                                    art_ref_t child, uint8_t key) {
+    node->children[key] = child;
+    node->count++;
+    return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE256_TYPE);
+}
+
+static inline art_ref_t art_node256_erase(art_t *art, art_node256_t *node,
+                                          uint8_t key_chunk) {
+    node->children[key_chunk] = CROARING_ART_NULL_REF;
+    node->count--;
+    if (node->count > 48) {
+        return art_get_ref(art, (art_node_t *)node, CROARING_ART_NODE256_TYPE);
+    }
+
+    art_node48_t *new_node =
+        art_node48_create(art, node->base.prefix, node->base.prefix_size);
+    for (size_t i = 0; i < 256; ++i) {
+        if (node->children[i] != CROARING_ART_NULL_REF) {
+            art_node48_insert(art, new_node, node->children[i], i);
+        }
+    }
+    art_node_free(art, (art_node_t *)node, CROARING_ART_NODE256_TYPE);
+    return art_get_ref(art, (art_node_t *)new_node, CROARING_ART_NODE48_TYPE);
+}
+
+static inline void art_node256_replace(art_node256_t *node,
+                                       art_key_chunk_t key_chunk,
+                                       art_ref_t new_child) {
+    node->children[key_chunk] = new_child;
+}
+
+static inline art_indexed_child_t art_node256_next_child(
+    const art_node256_t *node, int index) {
+    art_indexed_child_t indexed_child;
+    index++;
+    for (size_t i = index; i < 256; ++i) {
+        if (node->children[i] != CROARING_ART_NULL_REF) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[i];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node256_prev_child(
+    const art_node256_t *node, int index) {
+    if (index > 256) {
+        index = 256;
+    }
+    index--;
+    art_indexed_child_t indexed_child;
+    for (int i = index; i >= 0; --i) {
+        if (node->children[i] != CROARING_ART_NULL_REF) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[i];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node256_child_at(
+    const art_node256_t *node, int index) {
+    art_indexed_child_t indexed_child;
+    if (index < 0 || index >= 256) {
+        indexed_child.child = CROARING_ART_NULL_REF;
+        return indexed_child;
+    }
+    indexed_child.index = index;
+    indexed_child.child = node->children[index];
+    indexed_child.key_chunk = index;
+    return indexed_child;
+}
+
+static inline art_indexed_child_t art_node256_lower_bound(
+    art_node256_t *node, art_key_chunk_t key_chunk) {
+    art_indexed_child_t indexed_child;
+    for (size_t i = key_chunk; i < 256; ++i) {
+        if (node->children[i] != CROARING_ART_NULL_REF) {
+            indexed_child.index = i;
+            indexed_child.child = node->children[i];
+            indexed_child.key_chunk = i;
+            return indexed_child;
+        }
+    }
+    indexed_child.child = CROARING_ART_NULL_REF;
+    return indexed_child;
+}
+
+static bool art_node256_internal_validate(const art_t *art,
+                                          const art_node256_t *node,
+                                          art_internal_validate_t validator) {
+    if (node->count <= 48) {
+        return art_validate_fail(&validator, "Node256 has too few children");
+    }
+    if (node->count > 256) {
+        return art_validate_fail(&validator, "Node256 has too many children");
+    }
+    validator.depth++;
+    int actual_count = 0;
+    for (int i = 0; i < 256; ++i) {
+        if (node->children[i] != CROARING_ART_NULL_REF) {
+            actual_count++;
+
+            for (int j = i + 1; j < 256; ++j) {
+                if (node->children[i] == node->children[j]) {
+                    return art_validate_fail(&validator,
+                                             "Node256 has duplicate children");
+                }
+            }
+
+            validator.current_key[validator.depth - 1] = i;
+            if (!art_internal_validate_at(art, node->children[i], validator)) {
+                return false;
+            }
+        }
+    }
+    if (actual_count != node->count) {
+        return art_validate_fail(
+            &validator, "Node256 count does not match actual children");
+    }
+    return true;
+}
+
+// Finds the child with the given key chunk in the inner node, returns NULL if
+// no such child is found.
+static art_ref_t art_find_child(const art_inner_node_t *node,
+                                art_typecode_t typecode,
+                                art_key_chunk_t key_chunk) {
+    switch (typecode) {
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_find_child((art_node4_t *)node, key_chunk);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_find_child((art_node16_t *)node, key_chunk);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_find_child((art_node48_t *)node, key_chunk);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_find_child((art_node256_t *)node, key_chunk);
+        default:
+            assert(false);
+            return CROARING_ART_NULL_REF;
+    }
+}
+
+// Replaces the child with the given key chunk in the inner node.
+static void art_replace(art_inner_node_t *node, art_typecode_t typecode,
+                        art_key_chunk_t key_chunk, art_ref_t new_child) {
+    switch (typecode) {
+        case CROARING_ART_NODE4_TYPE:
+            art_node4_replace((art_node4_t *)node, key_chunk, new_child);
+            break;
+        case CROARING_ART_NODE16_TYPE:
+            art_node16_replace((art_node16_t *)node, key_chunk, new_child);
+            break;
+        case CROARING_ART_NODE48_TYPE:
+            art_node48_replace((art_node48_t *)node, key_chunk, new_child);
+            break;
+        case CROARING_ART_NODE256_TYPE:
+            art_node256_replace((art_node256_t *)node, key_chunk, new_child);
+            break;
+        default:
+            assert(false);
+    }
+}
+
+// Erases the child with the given key chunk from the inner node, returns the
+// updated node (the same as the initial node if it was not shrunk).
+static art_ref_t art_node_erase(art_t *art, art_inner_node_t *node,
+                                art_typecode_t typecode,
+                                art_key_chunk_t key_chunk) {
+    switch (typecode) {
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_erase(art, (art_node4_t *)node, key_chunk);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_erase(art, (art_node16_t *)node, key_chunk);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_erase(art, (art_node48_t *)node, key_chunk);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_erase(art, (art_node256_t *)node, key_chunk);
+        default:
+            assert(false);
+            return CROARING_ART_NULL_REF;
+    }
+}
+
+// Inserts the leaf with the given key chunk in the inner node, returns a
+// pointer to the (possibly expanded) node.
+static art_ref_t art_node_insert_leaf(art_t *art, art_inner_node_t *node,
+                                      art_typecode_t typecode,
+                                      art_key_chunk_t key_chunk,
+                                      art_ref_t leaf) {
+    switch (typecode) {
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_insert(art, (art_node4_t *)node, leaf, key_chunk);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_insert(art, (art_node16_t *)node, leaf,
+                                     key_chunk);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_insert(art, (art_node48_t *)node, leaf,
+                                     key_chunk);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_insert(art, (art_node256_t *)node, leaf,
+                                      key_chunk);
+        default:
+            assert(false);
+            return CROARING_ART_NULL_REF;
+    }
+}
+
+static uint64_t art_node_get_next_free(const art_t *art, art_ref_t ref) {
+    art_node_t *node = art_deref(art, ref);
+    art_typecode_t typecode = art_ref_typecode(ref);
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return ((art_leaf_t *)node)->next_free;
+        case CROARING_ART_NODE4_TYPE:
+            return ((art_node4_t *)node)->next_free;
+        case CROARING_ART_NODE16_TYPE:
+            return ((art_node16_t *)node)->next_free;
+        case CROARING_ART_NODE48_TYPE:
+            return ((art_node48_t *)node)->next_free;
+        case CROARING_ART_NODE256_TYPE:
+            return ((art_node256_t *)node)->next_free;
+        default:
+            assert(false);
+            return 0;
+    }
+}
+
+static void art_node_set_next_free(art_node_t *node, art_typecode_t typecode,
+                                   uint64_t next_free) {
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            ((art_leaf_t *)node)->next_free = next_free;
+            break;
+        case CROARING_ART_NODE4_TYPE:
+            ((art_node4_t *)node)->next_free = next_free;
+            break;
+        case CROARING_ART_NODE16_TYPE:
+            ((art_node16_t *)node)->next_free = next_free;
+            break;
+        case CROARING_ART_NODE48_TYPE:
+            ((art_node48_t *)node)->next_free = next_free;
+            break;
+        case CROARING_ART_NODE256_TYPE:
+            ((art_node256_t *)node)->next_free = next_free;
+            break;
+        default:
+            assert(false);
+    }
+}
+
+// Marks the node as unoccopied and frees its index.
+static void art_node_free(art_t *art, art_node_t *node,
+                          art_typecode_t typecode) {
+    uint64_t index = art_get_index(art, node, typecode);
+    uint64_t next_free = art->first_free[typecode];
+    art_node_set_next_free(node, typecode, next_free);
+    art->first_free[typecode] = index;
+}
+
+// Returns the next child in key order, or NULL if called on a leaf.
+// Provided index may be in the range [-1, 255].
+static art_indexed_child_t art_node_next_child(const art_node_t *node,
+                                               art_typecode_t typecode,
+                                               int index) {
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return (art_indexed_child_t){
+                .child = CROARING_ART_NULL_REF,
+                .index = 0,
+                .key_chunk = 0,
+            };
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_next_child((art_node4_t *)node, index);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_next_child((art_node16_t *)node, index);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_next_child((art_node48_t *)node, index);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_next_child((art_node256_t *)node, index);
+        default:
+            assert(false);
+            return (art_indexed_child_t){0, 0, 0};
+    }
+}
+
+// Returns the previous child in key order, or NULL if called on a leaf.
+// Provided index may be in the range [0, 256].
+static art_indexed_child_t art_node_prev_child(const art_node_t *node,
+                                               art_typecode_t typecode,
+                                               int index) {
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return (art_indexed_child_t){
+                .child = CROARING_ART_NULL_REF,
+                .index = 0,
+                .key_chunk = 0,
+            };
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_prev_child((art_node4_t *)node, index);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_prev_child((art_node16_t *)node, index);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_prev_child((art_node48_t *)node, index);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_prev_child((art_node256_t *)node, index);
+        default:
+            assert(false);
+            return (art_indexed_child_t){0, 0, 0};
+    }
+}
+
+// Returns the child found at the provided index, or NULL if called on a
+// leaf. Provided index is only valid if returned by
+// art_node_(next|prev)_child.
+static art_indexed_child_t art_node_child_at(const art_node_t *node,
+                                             art_typecode_t typecode,
+                                             int index) {
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return (art_indexed_child_t){
+                .child = CROARING_ART_NULL_REF,
+                .index = 0,
+                .key_chunk = 0,
+            };
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_child_at((art_node4_t *)node, index);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_child_at((art_node16_t *)node, index);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_child_at((art_node48_t *)node, index);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_child_at((art_node256_t *)node, index);
+        default:
+            assert(false);
+            return (art_indexed_child_t){0, 0, 0};
+    }
+}
+
+// Returns the child with the smallest key equal to or greater than the
+// given key chunk, NULL if called on a leaf or no such child was found.
+static art_indexed_child_t art_node_lower_bound(const art_node_t *node,
+                                                art_typecode_t typecode,
+                                                art_key_chunk_t key_chunk) {
+    switch (typecode) {
+        case CROARING_ART_LEAF_TYPE:
+            return (art_indexed_child_t){
+                .child = CROARING_ART_NULL_REF,
+                .index = 0,
+                .key_chunk = 0,
+            };
+        case CROARING_ART_NODE4_TYPE:
+            return art_node4_lower_bound((art_node4_t *)node, key_chunk);
+        case CROARING_ART_NODE16_TYPE:
+            return art_node16_lower_bound((art_node16_t *)node, key_chunk);
+        case CROARING_ART_NODE48_TYPE:
+            return art_node48_lower_bound((art_node48_t *)node, key_chunk);
+        case CROARING_ART_NODE256_TYPE:
+            return art_node256_lower_bound((art_node256_t *)node, key_chunk);
+        default:
+            assert(false);
+            return (art_indexed_child_t){0, 0, 0};
+    }
+}
+
+// ====================== End of node-specific functions ======================
+
+// Compares the given ranges of two keys, returns their relative order:
+// * Key range 1 <  key range 2: a negative value
+// * Key range 1 == key range 2: 0
+// * Key range 1 >  key range 2: a positive value
+static inline int art_compare_prefix(const art_key_chunk_t key1[],
+                                     uint8_t key1_from,
+                                     const art_key_chunk_t key2[],
+                                     uint8_t key2_from, uint8_t length) {
+    return memcmp(key1 + key1_from, key2 + key2_from, length);
+}
+
+// Compares two keys in full, see art_compare_prefix.
+int art_compare_keys(const art_key_chunk_t key1[],
+                     const art_key_chunk_t key2[]) {
+    return art_compare_prefix(key1, 0, key2, 0, ART_KEY_BYTES);
+}
+
+// Returns the length of the common prefix between two key ranges.
+static uint8_t art_common_prefix(const art_key_chunk_t key1[],
+                                 uint8_t key1_from, uint8_t key1_to,
+                                 const art_key_chunk_t key2[],
+                                 uint8_t key2_from, uint8_t key2_to) {
+    uint8_t min_len = key1_to - key1_from;
+    uint8_t key2_len = key2_to - key2_from;
+    if (key2_len < min_len) {
+        min_len = key2_len;
+    }
+    uint8_t offset = 0;
+    for (; offset < min_len; ++offset) {
+        if (key1[key1_from + offset] != key2[key2_from + offset]) {
+            return offset;
+        }
+    }
+    return offset;
+}
+
+/**
+ * Extends the array of nodes of the given typecode. Invalidates pointers into
+ * the array obtained by `art_deref`.
+ */
+static void art_extend(art_t *art, art_typecode_t typecode) {
+    uint64_t size = art->first_free[typecode];
+    uint64_t capacity = art->capacities[typecode];
+    if (size < capacity) {
+        return;
+    }
+    uint64_t new_capacity;
+    if (capacity == 0) {
+        new_capacity = 2;
+    } else if (capacity < 1024) {
+        new_capacity = 2 * capacity;
+    } else {
+        new_capacity = 5 * capacity / 4;
+    }
+    art->capacities[typecode] = new_capacity;
+    art->nodes[typecode] = roaring_realloc(
+        art->nodes[typecode], new_capacity * ART_NODE_SIZES[typecode]);
+    uint64_t increase = new_capacity - capacity;
+    memset(art_get_node(art, capacity, typecode), 0,
+           increase * ART_NODE_SIZES[typecode]);
+    for (uint64_t i = capacity; i < new_capacity; ++i) {
+        art_node_set_next_free(art_get_node(art, i, typecode), typecode, i + 1);
+    }
+}
+
+/**
+ * Returns the next free index for the given typecode, may be equal to the
+ * capacity of the array.
+ */
+static uint64_t art_next_free(const art_t *art, art_typecode_t typecode) {
+    uint64_t index = art->first_free[typecode];
+    return art_node_get_next_free(art, art_to_ref(index, typecode));
+}
+
+/**
+ * Marks an index for the given typecode as used, expanding the relevant node
+ * array if necessary.
+ */
+static uint64_t art_allocate_index(art_t *art, art_typecode_t typecode) {
+    uint64_t first_free = art->first_free[typecode];
+    if (first_free == art->capacities[typecode]) {
+        art_extend(art, typecode);
+        art->first_free[typecode]++;
+        return first_free;
+    }
+    art->first_free[typecode] = art_next_free(art, typecode);
+    return first_free;
+}
+
+// Returns a pointer to the rootmost node where the value was inserted, may
+// not be equal to `node`.
+static art_ref_t art_insert_at(art_t *art, art_ref_t ref,
+                               const art_key_chunk_t key[], uint8_t depth,
+                               art_ref_t new_leaf) {
+    if (art_is_leaf(ref)) {
+        art_leaf_t *leaf = (art_leaf_t *)art_deref(art, ref);
+        uint8_t common_prefix = art_common_prefix(
+            leaf->key, depth, ART_KEY_BYTES, key, depth, ART_KEY_BYTES);
+
+        // Previously this was a leaf, create an inner node instead and add
+        // both the existing and new leaf to it.
+        art_node_t *new_node =
+            (art_node_t *)art_node4_create(art, key + depth, common_prefix);
+
+        art_ref_t new_ref = art_node_insert_leaf(
+            art, (art_inner_node_t *)new_node, CROARING_ART_NODE4_TYPE,
+            leaf->key[depth + common_prefix], ref);
+        new_ref = art_node_insert_leaf(art, (art_inner_node_t *)new_node,
+                                       CROARING_ART_NODE4_TYPE,
+                                       key[depth + common_prefix], new_leaf);
+
+        // The new inner node is now the rootmost node.
+        return new_ref;
+    }
+    art_inner_node_t *inner_node = (art_inner_node_t *)art_deref(art, ref);
+    // Not a leaf: inner node
+    uint8_t common_prefix =
+        art_common_prefix(inner_node->prefix, 0, inner_node->prefix_size, key,
+                          depth, ART_KEY_BYTES);
+    if (common_prefix != inner_node->prefix_size) {
+        // Partial prefix match. Create a new internal node to hold the common
+        // prefix.
+        // We create a copy of the node's prefix as the creation of a new
+        // node may invalidate the prefix pointer.
+        art_key_chunk_t *prefix_copy = (art_key_chunk_t *)roaring_malloc(
+            common_prefix * sizeof(art_key_chunk_t));
+        memcpy(prefix_copy, inner_node->prefix,
+               common_prefix * sizeof(art_key_chunk_t));
+        art_node4_t *node4 = art_node4_create(art, prefix_copy, common_prefix);
+        roaring_free(prefix_copy);
+
+        // Deref as a new node was created.
+        inner_node = (art_inner_node_t *)art_deref(art, ref);
+
+        // Make the existing internal node a child of the new internal node.
+        art_node4_insert(art, node4, ref, inner_node->prefix[common_prefix]);
+
+        // Deref again as a new node was created.
+        inner_node = (art_inner_node_t *)art_deref(art, ref);
+
+        // Correct the prefix of the moved internal node, trimming off the
+        // chunk inserted into the new internal node.
+        inner_node->prefix_size = inner_node->prefix_size - common_prefix - 1;
+        if (inner_node->prefix_size > 0) {
+            // Move the remaining prefix to the correct position.
+            memmove(inner_node->prefix, inner_node->prefix + common_prefix + 1,
+                    inner_node->prefix_size);
+        }
+
+        // Insert the value in the new internal node.
+        return art_node_insert_leaf(art, (art_inner_node_t *)node4,
+                                    CROARING_ART_NODE4_TYPE,
+                                    key[common_prefix + depth], new_leaf);
+    }
+    // Prefix matches entirely or node has no prefix. Look for an existing
+    // child.
+    art_key_chunk_t key_chunk = key[depth + common_prefix];
+    art_ref_t child =
+        art_find_child(inner_node, art_ref_typecode(ref), key_chunk);
+    if (child != CROARING_ART_NULL_REF) {
+        art_ref_t new_child =
+            art_insert_at(art, child, key, depth + common_prefix + 1, new_leaf);
+        if (new_child != child) {
+            // Deref again as a new node may have been created.
+            inner_node = (art_inner_node_t *)art_deref(art, ref);
+            // Node type changed.
+            art_replace(inner_node, art_ref_typecode(ref), key_chunk,
+                        new_child);
+        }
+        return ref;
+    }
+    return art_node_insert_leaf(art, inner_node, art_ref_typecode(ref),
+                                key_chunk, new_leaf);
+}
+
+// Erase helper struct.
+typedef struct art_erase_result_s {
+    // The rootmost node where the value was erased, may not be equal to
+    // the original node. If no value was removed, this is
+    // CROARING_ART_NULL_REF.
+    art_ref_t rootmost_node;
+
+    // True if a value was erased.
+    bool erased;
+
+    // Value removed, if any.
+    art_val_t value_erased;
+} art_erase_result_t;
+
+// Searches for the given key starting at `node`, erases it if found.
+static art_erase_result_t art_erase_at(art_t *art, art_ref_t ref,
+                                       const art_key_chunk_t *key,
+                                       uint8_t depth) {
+    art_erase_result_t result;
+    result.rootmost_node = CROARING_ART_NULL_REF;
+    result.erased = false;
+
+    if (art_is_leaf(ref)) {
+        art_leaf_t *leaf = (art_leaf_t *)art_deref(art, ref);
+        uint8_t common_prefix = art_common_prefix(leaf->key, 0, ART_KEY_BYTES,
+                                                  key, 0, ART_KEY_BYTES);
+        if (common_prefix != ART_KEY_BYTES) {
+            // Leaf key mismatch.
+            return result;
+        }
+        result.erased = true;
+        result.value_erased = leaf->val;
+        art_node_free(art, (art_node_t *)leaf, CROARING_ART_LEAF_TYPE);
+        return result;
+    }
+    art_inner_node_t *inner_node = (art_inner_node_t *)art_deref(art, ref);
+    uint8_t common_prefix =
+        art_common_prefix(inner_node->prefix, 0, inner_node->prefix_size, key,
+                          depth, ART_KEY_BYTES);
+    if (common_prefix != inner_node->prefix_size) {
+        // Prefix mismatch.
+        return result;
+    }
+    art_key_chunk_t key_chunk = key[depth + common_prefix];
+    art_ref_t child =
+        art_find_child(inner_node, art_ref_typecode(ref), key_chunk);
+    if (child == CROARING_ART_NULL_REF) {
+        // No child with key chunk.
+        return result;
+    }
+    // Try to erase the key further down. Skip the key chunk associated with
+    // the child in the node.
+    art_erase_result_t child_result =
+        art_erase_at(art, child, key, depth + common_prefix + 1);
+    if (!child_result.erased) {
+        return result;
+    }
+    result.erased = true;
+    result.value_erased = child_result.value_erased;
+    result.rootmost_node = ref;
+
+    // Deref again as nodes may have changed location.
+    inner_node = (art_inner_node_t *)art_deref(art, ref);
+    if (child_result.rootmost_node == CROARING_ART_NULL_REF) {
+        // Child node was fully erased, erase it from this node's children.
+        result.rootmost_node =
+            art_node_erase(art, inner_node, art_ref_typecode(ref), key_chunk);
+    } else if (child_result.rootmost_node != child) {
+        // Child node was not fully erased, update the pointer to it in this
+        // node.
+        art_replace(inner_node, art_ref_typecode(ref), key_chunk,
+                    child_result.rootmost_node);
+    }
+    return result;
+}
+
+// Searches for the given key starting at `node`, returns NULL if the key
+// was not found.
+static art_val_t *art_find_at(const art_t *art, art_ref_t ref,
+                              const art_key_chunk_t *key, uint8_t depth) {
+    while (!art_is_leaf(ref)) {
+        art_inner_node_t *inner_node = (art_inner_node_t *)art_deref(art, ref);
+        uint8_t common_prefix =
+            art_common_prefix(inner_node->prefix, 0, inner_node->prefix_size,
+                              key, depth, ART_KEY_BYTES);
+        if (common_prefix != inner_node->prefix_size) {
+            return NULL;
+        }
+        art_ref_t child = art_find_child(inner_node, art_ref_typecode(ref),
+                                         key[depth + inner_node->prefix_size]);
+        if (child == CROARING_ART_NULL_REF) {
+            return NULL;
+        }
+        ref = child;
+        // Include both the prefix and the child key chunk in the depth.
+        depth += inner_node->prefix_size + 1;
+    }
+    art_leaf_t *leaf = (art_leaf_t *)art_deref(art, ref);
+    if (depth >= ART_KEY_BYTES) {
+        return &leaf->val;
+    }
+    uint8_t common_prefix =
+        art_common_prefix(leaf->key, 0, ART_KEY_BYTES, key, 0, ART_KEY_BYTES);
+    if (common_prefix == ART_KEY_BYTES) {
+        return &leaf->val;
+    }
+    return NULL;
+}
+
+static void art_node_print_type(art_ref_t ref) {
+    switch (art_ref_typecode(ref)) {
+        case CROARING_ART_LEAF_TYPE:
+            printf("Leaf");
+            return;
+        case CROARING_ART_NODE4_TYPE:
+            printf("Node4");
+            return;
+        case CROARING_ART_NODE16_TYPE:
+            printf("Node16");
+            return;
+        case CROARING_ART_NODE48_TYPE:
+            printf("Node48");
+            return;
+        case CROARING_ART_NODE256_TYPE:
+            printf("Node256");
+            return;
+        default:
+            assert(false);
+            return;
+    }
+}
+
+void art_node_printf(const art_t *art, art_ref_t ref, uint8_t depth) {
+    if (art_is_leaf(ref)) {
+        printf("{ type: Leaf, key: ");
+        art_leaf_t *leaf = (art_leaf_t *)art_deref(art, ref);
+        for (size_t i = 0; i < ART_KEY_BYTES; ++i) {
+            printf("%02x", leaf->key[i]);
+        }
+        printf(" }\n");
+        return;
+    }
+    printf("{\n");
+    depth++;
+
+    printf("%*s", depth, "");
+    printf("type: ");
+    art_node_print_type(ref);
+    printf("\n");
+
+    art_inner_node_t *inner_node = (art_inner_node_t *)art_deref(art, ref);
+    printf("%*s", depth, "");
+    printf("prefix_size: %d\n", inner_node->prefix_size);
+
+    printf("%*s", depth, "");
+    printf("prefix: ");
+    for (uint8_t i = 0; i < inner_node->prefix_size; ++i) {
+        printf("%02x", inner_node->prefix[i]);
+    }
+    printf("\n");
+
+    switch (art_ref_typecode(ref)) {
+        case CROARING_ART_NODE4_TYPE: {
+            art_node4_t *node4 = (art_node4_t *)inner_node;
+            for (uint8_t i = 0; i < node4->count; ++i) {
+                printf("%*s", depth, "");
+                printf("key: %02x ", node4->keys[i]);
+                art_node_printf(art, node4->children[i], depth);
+            }
+        } break;
+        case CROARING_ART_NODE16_TYPE: {
+            art_node16_t *node16 = (art_node16_t *)inner_node;
+            for (uint8_t i = 0; i < node16->count; ++i) {
+                printf("%*s", depth, "");
+                printf("key: %02x ", node16->keys[i]);
+                art_node_printf(art, node16->children[i], depth);
+            }
+        } break;
+        case CROARING_ART_NODE48_TYPE: {
+            art_node48_t *node48 = (art_node48_t *)inner_node;
+            for (uint16_t i = 0; i < 256; ++i) {
+                if (node48->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+                    printf("%*s", depth, "");
+                    printf("key: %02x ", i);
+                    printf("child: %02x ", node48->keys[i]);
+                    art_node_printf(art, node48->children[node48->keys[i]],
+                                    depth);
+                }
+            }
+        } break;
+        case CROARING_ART_NODE256_TYPE: {
+            art_node256_t *node256 = (art_node256_t *)inner_node;
+            for (uint16_t i = 0; i < 256; ++i) {
+                if (node256->children[i] != CROARING_ART_NULL_REF) {
+                    printf("%*s", depth, "");
+                    printf("key: %02x ", i);
+                    art_node_printf(art, node256->children[i], depth);
+                }
+            }
+        } break;
+        default:
+            assert(false);
+            break;
+    }
+    depth--;
+    printf("%*s", depth, "");
+    printf("}\n");
+}
+
+/**
+ * Moves the node at `ref` to the earliest free index before it (if any),
+ * returns the new ref. Assumes `art->first_free[typecode]` points to the
+ * smallest free index.
+ */
+static art_ref_t art_move_node_to_shrink(art_t *art, art_ref_t ref) {
+    uint64_t idx = art_ref_index(ref);
+    art_typecode_t typecode = art_ref_typecode(ref);
+    uint64_t first_free = art->first_free[typecode];
+    assert(idx != first_free);
+    if (idx < first_free) {
+        return ref;
+    }
+    uint64_t from = idx;
+    uint64_t to = first_free;
+    uint64_t next_free = art_node_get_next_free(art, art_to_ref(to, typecode));
+    memcpy(art_get_node(art, to, typecode), art_get_node(art, from, typecode),
+           ART_NODE_SIZES[typecode]);
+
+    // With an integer representing the next free index, and an `x` representing
+    // an occupied index, assume the following scenario at the start of this
+    // function:
+    //     nodes = [1,2,5,x,x]
+    //     first_free = 0
+    //
+    // We just moved a node from index 3 to 0:
+    //     nodes = [x,2,5,?,x]
+    //
+    // We need to modify the free list so that the free indices are ascending.
+    // This can be done by traversing the list until we find a node with a
+    // `next_free` greater than the index we copied the node from, and inserting
+    // the new index in between. This leads to the following:
+    //     nodes = [x,2,3,5,x]
+    //     first_free = 1
+    uint64_t initial_next_free = next_free;
+    uint64_t current = next_free;
+    while (next_free < from) {
+        current = next_free;
+        next_free =
+            art_node_get_next_free(art, art_to_ref(next_free, typecode));
+    }
+    art_node_set_next_free(art_deref(art, ref), typecode, next_free);
+    if (current < from) {
+        art_node_set_next_free(art_get_node(art, current, typecode), typecode,
+                               from);
+    }
+    art->first_free[typecode] =
+        from < initial_next_free ? from : initial_next_free;
+    return art_to_ref(to, typecode);
+}
+
+/**
+ * Sorts the free lists pointed to by art->first_free in ascending index order.
+ */
+static void art_sort_free_lists(art_t *art) {
+    for (art_typecode_t type = CROARING_ART_LEAF_TYPE;
+         type <= CROARING_ART_NODE256_TYPE; ++type) {
+        bool *free_indices =
+            (bool *)roaring_calloc(art->capacities[type], sizeof(bool));
+
+        for (uint64_t i = art->first_free[type]; i < art->capacities[type];
+             i = art_node_get_next_free(art, art_to_ref(i, type))) {
+            free_indices[i] = true;
+        }
+
+        uint64_t first_free = art->capacities[type];
+        for (uint64_t i = art->capacities[type]; i > 0; --i) {
+            uint64_t index = i - 1;
+            if (free_indices[index]) {
+                art_node_set_next_free(art_get_node(art, index, type), type,
+                                       first_free);
+                first_free = index;
+            }
+        }
+        art->first_free[type] = first_free;
+        roaring_free(free_indices);
+    }
+}
+
+/**
+ * Shrinks all node arrays to `first_free`. Assumes all indices after
+ * `first_free` are unused.
+ */
+static size_t art_shrink_node_arrays(art_t *art) {
+    size_t freed = 0;
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        if (art->first_free[t] < art->capacities[t]) {
+            uint64_t new_capacity = art->first_free[t];
+            art->nodes[t] = roaring_realloc(art->nodes[t],
+                                            new_capacity * ART_NODE_SIZES[t]);
+            freed += (art->capacities[t] - new_capacity) * ART_NODE_SIZES[t];
+            art->capacities[t] = new_capacity;
+        }
+    }
+    return freed;
+}
+
+/**
+ * Traverses the ART, moving nodes to earlier free indices and modifying their
+ * references along the way.
+ */
+static void art_shrink_at(art_t *art, art_ref_t ref) {
+    if (art_is_leaf(ref)) {
+        return;
+    }
+    switch (art_ref_typecode(ref)) {
+        case CROARING_ART_NODE4_TYPE: {
+            art_node4_t *node4 = (art_node4_t *)art_deref(art, ref);
+            for (uint8_t i = 0; i < node4->count; ++i) {
+                node4->children[i] =
+                    art_move_node_to_shrink(art, node4->children[i]);
+                art_shrink_at(art, node4->children[i]);
+            }
+        } break;
+        case CROARING_ART_NODE16_TYPE: {
+            art_node16_t *node16 = (art_node16_t *)art_deref(art, ref);
+            for (uint8_t i = 0; i < node16->count; ++i) {
+                node16->children[i] =
+                    art_move_node_to_shrink(art, node16->children[i]);
+                art_shrink_at(art, node16->children[i]);
+            }
+        } break;
+        case CROARING_ART_NODE48_TYPE: {
+            art_node48_t *node48 = (art_node48_t *)art_deref(art, ref);
+            for (int i = 0; i < 256; ++i) {
+                if (node48->keys[i] != CROARING_ART_NODE48_EMPTY_VAL) {
+                    uint8_t idx = node48->keys[i];
+                    node48->children[idx] =
+                        art_move_node_to_shrink(art, node48->children[idx]);
+                    art_shrink_at(art, node48->children[idx]);
+                }
+            }
+        } break;
+        case CROARING_ART_NODE256_TYPE: {
+            art_node256_t *node256 = (art_node256_t *)art_deref(art, ref);
+            for (int i = 0; i < 256; ++i) {
+                if (node256->children[i] != CROARING_ART_NULL_REF) {
+                    node256->children[i] =
+                        art_move_node_to_shrink(art, node256->children[i]);
+                    art_shrink_at(art, node256->children[i]);
+                }
+            }
+        } break;
+        default:
+            assert(false);
+            break;
+    }
+}
+
+void art_init_cleared(art_t *art) {
+    art->root = CROARING_ART_NULL_REF;
+    memset(art->first_free, 0, sizeof(art->first_free));
+    memset(art->capacities, 0, sizeof(art->capacities));
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        art->nodes[t] = NULL;
+    }
+}
+
+size_t art_shrink_to_fit(art_t *art) {
+    if (art_is_shrunken(art)) {
+        return 0;
+    }
+    if (art->root != CROARING_ART_NULL_REF) {
+        art_sort_free_lists(art);
+        art->root = art_move_node_to_shrink(art, art->root);
+        art_shrink_at(art, art->root);
+    }
+    return art_shrink_node_arrays(art);
+}
+
+bool art_is_shrunken(const art_t *art) {
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        if (art->first_free[t] != art->capacities[t]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+art_val_t *art_insert(art_t *art, const art_key_chunk_t *key, art_val_t val) {
+    art_ref_t leaf = art_leaf_create(art, key, val);
+    if (art->root == CROARING_ART_NULL_REF) {
+        art->root = leaf;
+        return &((art_leaf_t *)art_deref(art, leaf))->val;
+    }
+    art->root = art_insert_at(art, art->root, key, 0, leaf);
+    return &((art_leaf_t *)art_deref(art, leaf))->val;
+}
+
+bool art_erase(art_t *art, const art_key_chunk_t *key, art_val_t *erased_val) {
+    art_val_t erased_val_local;
+    if (erased_val == NULL) {
+        erased_val = &erased_val_local;
+    }
+    if (art->root == CROARING_ART_NULL_REF) {
+        return false;
+    }
+    art_erase_result_t result = art_erase_at(art, art->root, key, 0);
+    if (!result.erased) {
+        return false;
+    }
+    art->root = result.rootmost_node;
+    *erased_val = result.value_erased;
+    return true;
+}
+
+art_val_t *art_find(const art_t *art, const art_key_chunk_t *key) {
+    if (art->root == CROARING_ART_NULL_REF) {
+        return NULL;
+    }
+    return art_find_at(art, art->root, key, 0);
+}
+
+bool art_is_empty(const art_t *art) {
+    return art->root == CROARING_ART_NULL_REF;
+}
+
+void art_free(art_t *art) {
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        roaring_free(art->nodes[t]);
+    }
+}
+
+void art_printf(const art_t *art) {
+    if (art->root == CROARING_ART_NULL_REF) {
+        return;
+    }
+    art_node_printf(art, art->root, 0);
+}
+
+// Returns a reference to the current node that the iterator is positioned
+// at.
+static inline art_ref_t art_iterator_ref(art_iterator_t *iterator) {
+    return iterator->frames[iterator->frame].ref;
+}
+
+// Returns the current node that the iterator is positioned at.
+static inline art_node_t *art_iterator_node(art_iterator_t *iterator) {
+    return art_deref(iterator->art, art_iterator_ref(iterator));
+}
+
+// Sets the iterator key and value to the leaf's key and value. Always
+// returns true for convenience.
+static inline bool art_iterator_valid_loc(art_iterator_t *iterator,
+                                          art_ref_t leaf_ref) {
+    iterator->frames[iterator->frame].ref = leaf_ref;
+    iterator->frames[iterator->frame].index_in_node = 0;
+    art_leaf_t *leaf = (art_leaf_t *)art_deref(iterator->art, leaf_ref);
+    memcpy(iterator->key, leaf->key, ART_KEY_BYTES);
+    iterator->value = &leaf->val;
+    return true;
+}
+
+// Invalidates the iterator key and value. Always returns false for
+// convenience.
+static inline bool art_iterator_invalid_loc(art_iterator_t *iterator) {
+    memset(iterator->key, 0, ART_KEY_BYTES);
+    iterator->value = NULL;
+    return false;
+}
+
+// Moves the iterator one level down in the tree, given a node at the
+// current level and the index of the child that we're going down to.
+//
+// Note: does not set the index at the new level.
+static void art_iterator_down(art_iterator_t *iterator, art_ref_t ref,
+                              uint8_t index_in_node) {
+    iterator->frames[iterator->frame].ref = ref;
+    iterator->frames[iterator->frame].index_in_node = index_in_node;
+    iterator->frame++;
+    art_inner_node_t *node = (art_inner_node_t *)art_deref(iterator->art, ref);
+    art_indexed_child_t indexed_child = art_node_child_at(
+        (art_node_t *)node, art_ref_typecode(ref), index_in_node);
+    assert(indexed_child.child != CROARING_ART_NULL_REF);
+    iterator->frames[iterator->frame].ref = indexed_child.child;
+    iterator->depth += node->prefix_size + 1;
+}
+
+// Moves the iterator to the next/previous child of the current node.
+// Returns the child moved to, or NULL if there is no neighboring child.
+static art_ref_t art_iterator_neighbor_child(art_iterator_t *iterator,
+                                             bool forward) {
+    art_iterator_frame_t frame = iterator->frames[iterator->frame];
+    art_node_t *node = art_deref(iterator->art, frame.ref);
+    art_indexed_child_t indexed_child;
+    if (forward) {
+        indexed_child = art_node_next_child(node, art_ref_typecode(frame.ref),
+                                            frame.index_in_node);
+    } else {
+        indexed_child = art_node_prev_child(node, art_ref_typecode(frame.ref),
+                                            frame.index_in_node);
+    }
+    if (indexed_child.child != CROARING_ART_NULL_REF) {
+        art_iterator_down(iterator, frame.ref, indexed_child.index);
+    }
+    return indexed_child.child;
+}
+
+// Moves the iterator one level up in the tree, returns false if not
+// possible.
+static bool art_iterator_up(art_iterator_t *iterator) {
+    if (iterator->frame == 0) {
+        return false;
+    }
+    iterator->frame--;
+    // We went up, so we are at an inner node.
+    iterator->depth -=
+        ((art_inner_node_t *)art_iterator_node(iterator))->prefix_size + 1;
+    return true;
+}
+
+// Moves the iterator one level, followed by a move to the next / previous
+// leaf. Sets the status of the iterator.
+static bool art_iterator_up_and_move(art_iterator_t *iterator, bool forward) {
+    if (!art_iterator_up(iterator)) {
+        // We're at the root.
+        return art_iterator_invalid_loc(iterator);
+    }
+    return art_iterator_move(iterator, forward);
+}
+
+// Initializes the iterator at the first / last leaf of the given node.
+// Returns true for convenience.
+static bool art_node_init_iterator(art_ref_t ref, art_iterator_t *iterator,
+                                   bool first) {
+    while (!art_is_leaf(ref)) {
+        art_node_t *node = art_deref(iterator->art, ref);
+        art_indexed_child_t indexed_child;
+        if (first) {
+            indexed_child =
+                art_node_next_child(node, art_ref_typecode(ref), -1);
+        } else {
+            indexed_child =
+                art_node_prev_child(node, art_ref_typecode(ref), 256);
+        }
+        art_iterator_down(iterator, ref, indexed_child.index);
+        ref = indexed_child.child;
+    }
+    // We're at a leaf.
+    iterator->frames[iterator->frame].ref = ref;
+    iterator->frames[iterator->frame].index_in_node = 0;  // Should not matter.
+    return art_iterator_valid_loc(iterator, ref);
+}
+
+bool art_iterator_move(art_iterator_t *iterator, bool forward) {
+    if (art_is_leaf(art_iterator_ref(iterator))) {
+        bool went_up = art_iterator_up(iterator);
+        if (!went_up) {
+            // This leaf is the root, we're done.
+            return art_iterator_invalid_loc(iterator);
+        }
+    }
+    // Advance within inner node.
+    art_ref_t neighbor_child = art_iterator_neighbor_child(iterator, forward);
+    if (neighbor_child != CROARING_ART_NULL_REF) {
+        // There is another child at this level, go down to the first or
+        // last leaf.
+        return art_node_init_iterator(neighbor_child, iterator, forward);
+    }
+    // No more children at this level, go up.
+    return art_iterator_up_and_move(iterator, forward);
+}
+
+// Assumes the iterator is positioned at a node with an equal prefix path up
+// to the depth of the iterator.
+static bool art_node_iterator_lower_bound(art_ref_t ref,
+                                          art_iterator_t *iterator,
+                                          const art_key_chunk_t key[]) {
+    while (!art_is_leaf(ref)) {
+        art_inner_node_t *inner_node =
+            (art_inner_node_t *)art_deref(iterator->art, ref);
+        int prefix_comparison =
+            art_compare_prefix(inner_node->prefix, 0, key, iterator->depth,
+                               inner_node->prefix_size);
+        if (prefix_comparison < 0) {
+            // Prefix so far has been equal, but we've found a smaller key.
+            // Since we take the lower bound within each node, we can return
+            // the next leaf.
+            return art_iterator_up_and_move(iterator, true);
+        } else if (prefix_comparison > 0) {
+            // No key equal to the key we're looking for, return the first
+            // leaf.
+            return art_node_init_iterator(ref, iterator, true);
+        }
+        // Prefix is equal, move to lower bound child.
+        art_key_chunk_t key_chunk =
+            key[iterator->depth + inner_node->prefix_size];
+        art_indexed_child_t indexed_child = art_node_lower_bound(
+            (art_node_t *)inner_node, art_ref_typecode(ref), key_chunk);
+        if (indexed_child.child == CROARING_ART_NULL_REF) {
+            // Only smaller keys among children.
+            return art_iterator_up_and_move(iterator, true);
+        }
+        if (indexed_child.key_chunk > key_chunk) {
+            // Only larger children, return the first larger child.
+            art_iterator_down(iterator, ref, indexed_child.index);
+            return art_node_init_iterator(indexed_child.child, iterator, true);
+        }
+        // We found a child with an equal prefix.
+        art_iterator_down(iterator, ref, indexed_child.index);
+        ref = indexed_child.child;
+    }
+    art_leaf_t *leaf = (art_leaf_t *)art_deref(iterator->art, ref);
+    if (art_compare_keys(leaf->key, key) >= 0) {
+        // Leaf has an equal or larger key.
+        return art_iterator_valid_loc(iterator, ref);
+    }
+    // Leaf has an equal prefix, but the full key is smaller. Move to the
+    // next leaf.
+    return art_iterator_up_and_move(iterator, true);
+}
+
+art_iterator_t art_init_iterator(art_t *art, bool first) {
+    art_iterator_t iterator = CROARING_ZERO_INITIALIZER;
+    iterator.art = art;
+    if (art->root == CROARING_ART_NULL_REF) {
+        return iterator;
+    }
+    art_node_init_iterator(art->root, &iterator, first);
+    return iterator;
+}
+
+bool art_iterator_next(art_iterator_t *iterator) {
+    return art_iterator_move(iterator, true);
+}
+
+bool art_iterator_prev(art_iterator_t *iterator) {
+    return art_iterator_move(iterator, false);
+}
+
+bool art_iterator_lower_bound(art_iterator_t *iterator,
+                              const art_key_chunk_t *key) {
+    if (iterator->value == NULL) {
+        // We're beyond the end / start of the ART so the iterator does not
+        // have a valid key. Start from the root.
+        iterator->frame = 0;
+        iterator->depth = 0;
+        art_ref_t root = art_iterator_ref(iterator);
+        if (root == CROARING_ART_NULL_REF) {
+            return false;
+        }
+        return art_node_iterator_lower_bound(root, iterator, key);
+    }
+    int compare_result =
+        art_compare_prefix(iterator->key, 0, key, 0, ART_KEY_BYTES);
+    // Move up until we have an equal prefix, after which we can do a normal
+    // lower bound search.
+    while (compare_result != 0) {
+        if (!art_iterator_up(iterator)) {
+            if (compare_result < 0) {
+                // Only smaller keys found.
+                return art_iterator_invalid_loc(iterator);
+            } else {
+                return art_node_init_iterator(art_iterator_ref(iterator),
+                                              iterator, true);
+            }
+        }
+        // Since we're only moving up, we can keep comparing against the
+        // iterator key.
+        art_inner_node_t *inner_node =
+            (art_inner_node_t *)art_iterator_node(iterator);
+        compare_result =
+            art_compare_prefix(iterator->key, 0, key, 0,
+                               iterator->depth + inner_node->prefix_size);
+    }
+    if (compare_result > 0) {
+        return art_node_init_iterator(art_iterator_ref(iterator), iterator,
+                                      true);
+    }
+    return art_node_iterator_lower_bound(art_iterator_ref(iterator), iterator,
+                                         key);
+}
+
+art_iterator_t art_lower_bound(art_t *art, const art_key_chunk_t *key) {
+    art_iterator_t iterator = CROARING_ZERO_INITIALIZER;
+    iterator.art = art;
+    if (art->root != CROARING_ART_NULL_REF) {
+        art_node_iterator_lower_bound(art->root, &iterator, key);
+    }
+    return iterator;
+}
+
+art_iterator_t art_upper_bound(art_t *art, const art_key_chunk_t *key) {
+    art_iterator_t iterator = CROARING_ZERO_INITIALIZER;
+    iterator.art = art;
+    if (art->root != CROARING_ART_NULL_REF) {
+        if (art_node_iterator_lower_bound(art->root, &iterator, key) &&
+            art_compare_keys(iterator.key, key) == 0) {
+            art_iterator_next(&iterator);
+        }
+    }
+    return iterator;
+}
+
+void art_iterator_insert(art_iterator_t *iterator, const art_key_chunk_t *key,
+                         art_val_t val) {
+    // TODO: This can likely be faster.
+    art_insert(iterator->art, key, val);
+    assert(iterator->art->root != CROARING_ART_NULL_REF);
+    iterator->frame = 0;
+    iterator->depth = 0;
+    art_node_iterator_lower_bound(iterator->art->root, iterator, key);
+}
+
+bool art_iterator_erase(art_iterator_t *iterator, art_val_t *erased_val) {
+    art_val_t erased_val_local;
+    if (erased_val == NULL) {
+        erased_val = &erased_val_local;
+    }
+    if (iterator->value == NULL) {
+        return false;
+    }
+    art_key_chunk_t initial_key[ART_KEY_BYTES];
+    memcpy(initial_key, iterator->key, ART_KEY_BYTES);
+
+    *erased_val = *iterator->value;
+    // Erase the leaf.
+    art_node_free(iterator->art, art_iterator_node(iterator),
+                  art_ref_typecode(art_iterator_ref(iterator)));
+    bool went_up = art_iterator_up(iterator);
+    if (!went_up) {
+        // We're erasing the root.
+        iterator->art->root = CROARING_ART_NULL_REF;
+        art_iterator_invalid_loc(iterator);
+        return true;
+    }
+
+    // Erase the leaf in its parent.
+    art_ref_t parent_ref = art_iterator_ref(iterator);
+    art_inner_node_t *parent_node =
+        (art_inner_node_t *)art_iterator_node(iterator);
+    art_key_chunk_t key_chunk_in_parent =
+        iterator->key[iterator->depth + parent_node->prefix_size];
+    art_ref_t new_parent_ref =
+        art_node_erase(iterator->art, parent_node, art_ref_typecode(parent_ref),
+                       key_chunk_in_parent);
+
+    if (new_parent_ref != parent_ref) {
+        // Replace the pointer to the inner node we erased from in its
+        // parent (it may be a leaf now).
+        iterator->frames[iterator->frame].ref = new_parent_ref;
+        went_up = art_iterator_up(iterator);
+        if (went_up) {
+            art_ref_t grandparent_ref = art_iterator_ref(iterator);
+            art_inner_node_t *grandparent_node =
+                (art_inner_node_t *)art_iterator_node(iterator);
+            art_key_chunk_t key_chunk_in_grandparent =
+                iterator->key[iterator->depth + grandparent_node->prefix_size];
+            art_replace(grandparent_node, art_ref_typecode(grandparent_ref),
+                        key_chunk_in_grandparent, new_parent_ref);
+        } else {
+            // We were already at the rootmost node.
+            iterator->art->root = new_parent_ref;
+        }
+    }
+
+    iterator->frame = 0;
+    iterator->depth = 0;
+    // Do a lower bound search for the initial key, which will find the
+    // first greater key if it exists. This can likely be mildly faster if
+    // we instead start from the current position.
+    art_node_iterator_lower_bound(iterator->art->root, iterator, initial_key);
+    return true;
+}
+
+static bool art_internal_validate_at(const art_t *art, art_ref_t ref,
+                                     art_internal_validate_t validator) {
+    if (ref == CROARING_ART_NULL_REF) {
+        return art_validate_fail(&validator, "node is null");
+    }
+    if (art_is_leaf(ref)) {
+        art_leaf_t *leaf = (art_leaf_t *)art_deref(art, ref);
+        if (art_compare_prefix(leaf->key, 0, validator.current_key, 0,
+                               validator.depth) != 0) {
+            return art_validate_fail(&validator,
+                                     "leaf key does not match its "
+                                     "position's prefix in the tree");
+        }
+        if (validator.validate_cb != NULL &&
+            !validator.validate_cb(leaf->val, validator.reason,
+                                   validator.context)) {
+            if (*validator.reason == NULL) {
+                *validator.reason = "leaf validation failed";
+            }
+            return false;
+        }
+    } else {
+        art_inner_node_t *inner_node = (art_inner_node_t *)art_deref(art, ref);
+
+        if (validator.depth + inner_node->prefix_size + 1 > ART_KEY_BYTES) {
+            return art_validate_fail(&validator,
+                                     "node has too much prefix at given depth");
+        }
+        memcpy(validator.current_key + validator.depth, inner_node->prefix,
+               inner_node->prefix_size);
+        validator.depth += inner_node->prefix_size;
+
+        switch (art_ref_typecode(ref)) {
+            case CROARING_ART_NODE4_TYPE:
+                if (!art_node4_internal_validate(art, (art_node4_t *)inner_node,
+                                                 validator)) {
+                    return false;
+                }
+                break;
+            case CROARING_ART_NODE16_TYPE:
+                if (!art_node16_internal_validate(
+                        art, (art_node16_t *)inner_node, validator)) {
+                    return false;
+                }
+                break;
+            case CROARING_ART_NODE48_TYPE:
+                if (!art_node48_internal_validate(
+                        art, (art_node48_t *)inner_node, validator)) {
+                    return false;
+                }
+                break;
+            case CROARING_ART_NODE256_TYPE:
+                if (!art_node256_internal_validate(
+                        art, (art_node256_t *)inner_node, validator)) {
+                    return false;
+                }
+                break;
+            default:
+                return art_validate_fail(&validator, "invalid node type");
+        }
+    }
+    return true;
+}
+
+bool art_internal_validate(const art_t *art, const char **reason,
+                           art_validate_cb_t validate_cb, void *context) {
+    const char *reason_local;
+    if (reason == NULL) {
+        // Always allow assigning through *reason
+        reason = &reason_local;
+    }
+    *reason = NULL;
+    if (art->root == CROARING_ART_NULL_REF) {
+        return true;
+    }
+    art_internal_validate_t validator = {
+        .reason = reason,
+        .validate_cb = validate_cb,
+        .context = context,
+        .depth = 0,
+        .current_key = CROARING_ZERO_INITIALIZER,
+    };
+    for (art_typecode_t type = CROARING_ART_LEAF_TYPE;
+         type <= CROARING_ART_NODE256_TYPE; ++type) {
+        uint64_t capacity = art->capacities[type];
+        for (uint64_t i = 0; i < capacity; ++i) {
+            uint64_t first_free = art->first_free[type];
+            if (first_free > capacity) {
+                return art_validate_fail(&validator, "first_free > capacity");
+            }
+        }
+    }
+    return art_internal_validate_at(art, art->root, validator);
+}
+
+CROARING_STATIC_ASSERT(alignof(art_leaf_t) == alignof(art_node4_t),
+                       "Serialization assumes node type alignment is equal");
+CROARING_STATIC_ASSERT(alignof(art_leaf_t) == alignof(art_node16_t),
+                       "Serialization assumes node type alignment is equal");
+CROARING_STATIC_ASSERT(alignof(art_leaf_t) == alignof(art_node48_t),
+                       "Serialization assumes node type alignment is equal");
+CROARING_STATIC_ASSERT(alignof(art_leaf_t) == alignof(art_node256_t),
+                       "Serialization assumes node type alignment is equal");
+
+size_t art_size_in_bytes(const art_t *art) {
+    if (!art_is_shrunken(art)) {
+        return 0;
+    }
+    // Root.
+    size_t size = sizeof(art->root);
+    // Node counts.
+    size += sizeof(art->capacities);
+    // Alignment for leaves. The rest of the nodes are aligned the same way.
+    size +=
+        ((size + alignof(art_leaf_t) - 1) & ~(alignof(art_leaf_t) - 1)) - size;
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        size += art->capacities[t] * ART_NODE_SIZES[t];
+    }
+    return size;
+}
+
+size_t art_serialize(const art_t *art, char *buf) {
+    if (buf == NULL) {
+        return 0;
+    }
+    if (!art_is_shrunken(art)) {
+        return 0;
+    }
+    const char *initial_buf = buf;
+
+    // Root.
+    memcpy(buf, &art->root, sizeof(art->root));
+    buf += sizeof(art->root);
+
+    // Node counts.
+    memcpy(buf, art->capacities, sizeof(art->capacities));
+    buf += sizeof(art->capacities);
+
+    // Alignment for leaves. The rest of the nodes are aligned the same way.
+    size_t align_bytes =
+        CROARING_ART_ALIGN_SIZE_RELATIVE(buf, initial_buf, alignof(art_leaf_t));
+    memset(buf, 0, align_bytes);
+    buf += align_bytes;
+
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        if (art->capacities[t] > 0) {
+            size_t size = art->capacities[t] * ART_NODE_SIZES[t];
+            memcpy(buf, art->nodes[t], size);
+            buf += size;
+        }
+    }
+
+    return buf - initial_buf;
+}
+
+size_t art_frozen_view(const char *buf, size_t maxbytes, art_t *art) {
+    if (buf == NULL || art == NULL) {
+        return 0;
+    }
+    const char *initial_buf = buf;
+    art_init_cleared(art);
+
+    if (maxbytes < sizeof(art->root)) {
+        return 0;
+    }
+    memcpy(&art->root, buf, sizeof(art->root));
+    buf += sizeof(art->root);
+    maxbytes -= sizeof(art->root);
+
+    if (maxbytes < sizeof(art->capacities)) {
+        return 0;
+    }
+    CROARING_STATIC_ASSERT(sizeof(art->first_free) == sizeof(art->capacities),
+                           "first_free is read from capacities");
+    memcpy(art->first_free, buf, sizeof(art->capacities));
+    memcpy(art->capacities, buf, sizeof(art->capacities));
+    buf += sizeof(art->capacities);
+    maxbytes -= sizeof(art->capacities);
+
+    // Alignment for leaves. The rest of the nodes are aligned the same way.
+    const char *before_align = buf;
+    buf = CROARING_ART_ALIGN_BUF(buf, alignof(art_leaf_t));
+    if (maxbytes < (size_t)(buf - before_align)) {
+        return 0;
+    }
+    maxbytes -= buf - before_align;
+
+    for (art_typecode_t t = CROARING_ART_MIN_TYPE; t <= CROARING_ART_MAX_TYPE;
+         ++t) {
+        if (art->capacities[t] > 0) {
+            size_t size = art->capacities[t] * ART_NODE_SIZES[t];
+            if (maxbytes < size) {
+                return 0;
+            }
+            art->nodes[t] = (char *)buf;
+            buf += size;
+            maxbytes -= size;
+        }
+    }
+    return buf - initial_buf;
+}
+
+#ifdef __cplusplus
+}  // extern "C"
+}  // namespace roaring
+}  // namespace internal
+#endif
+
+#line 1 "submodules/CRoaring/src/roaring64.c"
+#include <assert.h>
+#include <stdalign.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <string.h>
+
+#line 10 "submodules/CRoaring/src/roaring64.c"
+
+// For serialization / deserialization
+#line 17 "submodules/CRoaring/src/roaring64.c"
+// containers.h last to avoid conflict with ROARING_CONTAINER_T.
+#line 19 "submodules/CRoaring/src/roaring64.c"
+
+#define CROARING_ALIGN_BUF(buf, alignment)          \
+    (char *)(((uintptr_t)(buf) + ((alignment)-1)) & \
+             (ptrdiff_t)(~((alignment)-1)))
+
+#define CROARING_BITSET_ALIGNMENT 64
+
+#ifdef __cplusplus
+using namespace ::roaring::internal;
+
+extern "C" {
+namespace roaring {
+namespace api {
+#endif
+
+// TODO: Copy on write.
+// TODO: Error on failed allocation.
+
+typedef struct roaring64_bitmap_s {
+    art_t art;
+    uint8_t flags;
+    uint64_t first_free;
+    uint64_t capacity;
+    container_t **containers;
+} roaring64_bitmap_t;
+
+// Leaf type of the ART used to keep the high 48 bits of each entry.
+// Low 8 bits: typecode
+// High 56 bits: container index
+typedef roaring64_leaf_t leaf_t;
+
+// Iterator struct to hold iteration state.
+typedef struct roaring64_iterator_s {
+    const roaring64_bitmap_t *r;
+    art_iterator_t art_it;
+    roaring_container_iterator_t container_it;
+    uint64_t high48;  // Key that art_it points to.
+
+    uint64_t value;
+    bool has_value;
+
+    // If has_value is false, then the iterator is saturated. This field
+    // indicates the direction of saturation. If true, there are no more values
+    // in the forward direction. If false, there are no more values in the
+    // backward direction.
+    bool saturated_forward;
+} roaring64_iterator_t;
+
+static inline bool is_frozen64(const roaring64_bitmap_t *r) {
+    return r->flags & ROARING_FLAG_FROZEN;
+}
+
+// Splits the given uint64 key into high 48 bit and low 16 bit components.
+// Expects high48_out to be of length ART_KEY_BYTES.
+static inline uint16_t split_key(uint64_t key, uint8_t high48_out[]) {
+    uint64_t tmp = croaring_htobe64(key);
+    memcpy(high48_out, (uint8_t *)(&tmp), ART_KEY_BYTES);
+    return (uint16_t)key;
+}
+
+// Recombines the high 48 bit and low 16 bit components into a uint64 key.
+// Expects high48_out to be of length ART_KEY_BYTES.
+static inline uint64_t combine_key(const uint8_t high48[], uint16_t low16) {
+    uint64_t result = 0;
+    memcpy((uint8_t *)(&result), high48, ART_KEY_BYTES);
+    return croaring_be64toh(result) | low16;
+}
+
+static inline uint64_t minimum(uint64_t a, uint64_t b) {
+    return (a < b) ? a : b;
+}
+
+static inline leaf_t create_leaf(uint64_t container_index, uint8_t typecode) {
+    return (container_index << 8) | typecode;
+}
+
+static inline uint8_t get_typecode(leaf_t leaf) { return (uint8_t)leaf; }
+
+static inline uint64_t get_index(leaf_t leaf) { return leaf >> 8; }
+
+static inline container_t *get_container(const roaring64_bitmap_t *r,
+                                         leaf_t leaf) {
+    return r->containers[get_index(leaf)];
+}
+
+// Replaces the container of `leaf` with the given container. Returns the
+// modified leaf for convenience.
+static inline leaf_t replace_container(roaring64_bitmap_t *r, leaf_t *leaf,
+                                       container_t *container,
+                                       uint8_t typecode) {
+    uint64_t index = get_index(*leaf);
+    r->containers[index] = container;
+    *leaf = create_leaf(index, typecode);
+    return *leaf;
+}
+
+/**
+ * Extends the array of container pointers.
+ */
+static void extend_containers(roaring64_bitmap_t *r) {
+    uint64_t size = r->first_free;
+    if (size < r->capacity) {
+        return;
+    }
+    uint64_t new_capacity;
+    if (r->capacity == 0) {
+        new_capacity = 2;
+    } else if (r->capacity < 1024) {
+        new_capacity = 2 * r->capacity;
+    } else {
+        new_capacity = 5 * r->capacity / 4;
+    }
+    uint64_t increase = new_capacity - r->capacity;
+    r->containers = (container_t **)roaring_realloc(
+        r->containers, new_capacity * sizeof(container_t *));
+    memset(r->containers + r->capacity, 0, increase * sizeof(container_t *));
+    r->capacity = new_capacity;
+}
+
+static uint64_t next_free_container_idx(const roaring64_bitmap_t *r) {
+    for (uint64_t i = r->first_free + 1; i < r->capacity; ++i) {
+        if (r->containers[i] == NULL) {
+            return i;
+        }
+    }
+    return r->capacity;
+}
+
+static uint64_t allocate_index(roaring64_bitmap_t *r) {
+    uint64_t first_free = r->first_free;
+    if (first_free == r->capacity) {
+        extend_containers(r);
+    }
+    r->first_free = next_free_container_idx(r);
+    return first_free;
+}
+
+static leaf_t add_container(roaring64_bitmap_t *r, container_t *container,
+                            uint8_t typecode) {
+    uint64_t index = allocate_index(r);
+    r->containers[index] = container;
+    return create_leaf(index, typecode);
+}
+
+static void remove_container(roaring64_bitmap_t *r, leaf_t leaf) {
+    uint64_t index = get_index(leaf);
+    r->containers[index] = NULL;
+    if (index < r->first_free) {
+        r->first_free = index;
+    }
+}
+
+// Copies the container referenced by `leaf` from `r1` to `r2`.
+static inline leaf_t copy_leaf_container(const roaring64_bitmap_t *r1,
+                                         roaring64_bitmap_t *r2, leaf_t leaf) {
+    uint8_t typecode = get_typecode(leaf);
+    // get_copy_of_container modifies the typecode passed in.
+    container_t *container = get_copy_of_container(
+        get_container(r1, leaf), &typecode, /*copy_on_write=*/false);
+    return add_container(r2, container, typecode);
+}
+
+static inline int compare_high48(art_key_chunk_t key1[],
+                                 art_key_chunk_t key2[]) {
+    return art_compare_keys(key1, key2);
+}
+
+static inline bool roaring64_iterator_init_at_leaf_first(
+    roaring64_iterator_t *it) {
+    it->high48 = combine_key(it->art_it.key, 0);
+    leaf_t leaf = (leaf_t)*it->art_it.value;
+    uint16_t low16 = 0;
+    it->container_it = container_init_iterator(get_container(it->r, leaf),
+                                               get_typecode(leaf), &low16);
+    it->value = it->high48 | low16;
+    return (it->has_value = true);
+}
+
+static inline bool roaring64_iterator_init_at_leaf_last(
+    roaring64_iterator_t *it) {
+    it->high48 = combine_key(it->art_it.key, 0);
+    leaf_t leaf = (leaf_t)*it->art_it.value;
+    uint16_t low16 = 0;
+    it->container_it = container_init_iterator_last(get_container(it->r, leaf),
+                                                    get_typecode(leaf), &low16);
+    it->value = it->high48 | low16;
+    return (it->has_value = true);
+}
+
+static inline roaring64_iterator_t *roaring64_iterator_init_at(
+    const roaring64_bitmap_t *r, roaring64_iterator_t *it, bool first) {
+    it->r = r;
+    it->art_it = art_init_iterator((art_t *)&r->art, first);
+    it->has_value = it->art_it.value != NULL;
+    if (it->has_value) {
+        if (first) {
+            roaring64_iterator_init_at_leaf_first(it);
+        } else {
+            roaring64_iterator_init_at_leaf_last(it);
+        }
+    } else {
+        it->saturated_forward = first;
+    }
+    return it;
+}
+
+roaring64_bitmap_t *roaring64_bitmap_create(void) {
+    roaring64_bitmap_t *r =
+        (roaring64_bitmap_t *)roaring_malloc(sizeof(roaring64_bitmap_t));
+    art_init_cleared(&r->art);
+    r->flags = 0;
+    r->capacity = 0;
+    r->first_free = 0;
+    r->containers = NULL;
+    return r;
+}
+
+void roaring64_bitmap_free(roaring64_bitmap_t *r) {
+    if (!r) {
+        return;
+    }
+    art_iterator_t it = art_init_iterator(&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        if (is_frozen64(r)) {
+            // Only free the container itself, not the buffer-backed contents
+            // within.
+            roaring_free(get_container(r, leaf));
+        } else {
+            container_free(get_container(r, leaf), get_typecode(leaf));
+        }
+        art_iterator_next(&it);
+    }
+    if (!is_frozen64(r)) {
+        art_free(&r->art);
+    }
+    roaring_free(r->containers);
+    roaring_free(r);
+}
+
+roaring64_bitmap_t *roaring64_bitmap_copy(const roaring64_bitmap_t *r) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t result_typecode = get_typecode(leaf);
+        container_t *result_container = get_copy_of_container(
+            get_container(r, leaf), &result_typecode, /*copy_on_write=*/false);
+        leaf_t result_leaf =
+            add_container(result, result_container, result_typecode);
+        art_insert(&result->art, it.key, (art_val_t)result_leaf);
+        art_iterator_next(&it);
+    }
+    return result;
+}
+
+/**
+ * Steal the containers from a 32-bit bitmap and insert them into a 64-bit
+ * bitmap (with an offset)
+ *
+ * After calling this function, the original bitmap will be empty, and the
+ * returned bitmap will contain all the values from the original bitmap.
+ */
+static void move_from_roaring32_offset(roaring64_bitmap_t *dst,
+                                       roaring_bitmap_t *src,
+                                       uint32_t high_bits) {
+    uint64_t key_base = ((uint64_t)high_bits) << 32;
+    uint32_t r32_size = ra_get_size(&src->high_low_container);
+    for (uint32_t i = 0; i < r32_size; ++i) {
+        uint16_t key = ra_get_key_at_index(&src->high_low_container, i);
+        uint8_t typecode;
+        container_t *container = ra_get_container_at_index(
+            &src->high_low_container, (uint16_t)i, &typecode);
+
+        uint8_t high48[ART_KEY_BYTES];
+        uint64_t high48_bits = key_base | ((uint64_t)key << 16);
+        split_key(high48_bits, high48);
+        leaf_t leaf = add_container(dst, container, typecode);
+        art_insert(&dst->art, high48, (art_val_t)leaf);
+    }
+    // We stole all the containers, so leave behind a size of zero
+    src->high_low_container.size = 0;
+}
+
+roaring64_bitmap_t *roaring64_bitmap_move_from_roaring32(
+    roaring_bitmap_t *bitmap32) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    move_from_roaring32_offset(result, bitmap32, 0);
+
+    return result;
+}
+
+roaring64_bitmap_t *roaring64_bitmap_from_range(uint64_t min, uint64_t max,
+                                                uint64_t step) {
+    if (step == 0 || max <= min) {
+        return NULL;
+    }
+    roaring64_bitmap_t *r = roaring64_bitmap_create();
+    if (step >= (1 << 16)) {
+        // Only one value per container.
+        for (uint64_t value = min; value < max; value += step) {
+            roaring64_bitmap_add(r, value);
+            if (value > UINT64_MAX - step) {
+                break;
+            }
+        }
+        return r;
+    }
+    do {
+        uint64_t high_bits = min & 0xFFFFFFFFFFFF0000;
+        uint16_t container_min = min & 0xFFFF;
+        uint32_t container_max = (uint32_t)minimum(max - high_bits, 1 << 16);
+
+        uint8_t typecode;
+        container_t *container = container_from_range(
+            &typecode, container_min, container_max, (uint16_t)step);
+
+        uint8_t high48[ART_KEY_BYTES];
+        split_key(min, high48);
+        leaf_t leaf = add_container(r, container, typecode);
+        art_insert(&r->art, high48, (art_val_t)leaf);
+
+        uint64_t gap = container_max - container_min + step - 1;
+        uint64_t increment = gap - (gap % step);
+        if (min > UINT64_MAX - increment) {
+            break;
+        }
+        min += increment;
+    } while (min < max);
+    return r;
+}
+
+roaring64_bitmap_t *roaring64_bitmap_of_ptr(size_t n_args,
+                                            const uint64_t *vals) {
+    roaring64_bitmap_t *r = roaring64_bitmap_create();
+    roaring64_bitmap_add_many(r, n_args, vals);
+    return r;
+}
+
+static inline leaf_t *containerptr_roaring64_bitmap_add(roaring64_bitmap_t *r,
+                                                        uint8_t *high48,
+                                                        uint16_t low16,
+                                                        leaf_t *leaf) {
+    if (leaf != NULL) {
+        uint8_t typecode = get_typecode(*leaf);
+        container_t *container = get_container(r, *leaf);
+        uint8_t typecode2;
+        container_t *container2 =
+            container_add(container, low16, typecode, &typecode2);
+        if (container2 != container) {
+            container_free(container, typecode);
+            replace_container(r, leaf, container2, typecode2);
+        }
+        return leaf;
+    } else {
+        array_container_t *ac = array_container_create();
+        uint8_t typecode;
+        container_t *container =
+            container_add(ac, low16, ARRAY_CONTAINER_TYPE, &typecode);
+        assert(ac == container);
+        leaf_t new_leaf = add_container(r, container, typecode);
+        return (leaf_t *)art_insert(&r->art, high48, (art_val_t)new_leaf);
+    }
+}
+
+void roaring64_bitmap_add(roaring64_bitmap_t *r, uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    leaf_t *leaf = (leaf_t *)art_find(&r->art, high48);
+    containerptr_roaring64_bitmap_add(r, high48, low16, leaf);
+}
+
+bool roaring64_bitmap_add_checked(roaring64_bitmap_t *r, uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    leaf_t *leaf = (leaf_t *)art_find(&r->art, high48);
+
+    int old_cardinality = 0;
+    if (leaf != NULL) {
+        old_cardinality = container_get_cardinality(get_container(r, *leaf),
+                                                    get_typecode(*leaf));
+    }
+    leaf = containerptr_roaring64_bitmap_add(r, high48, low16, leaf);
+    int new_cardinality =
+        container_get_cardinality(get_container(r, *leaf), get_typecode(*leaf));
+    return old_cardinality != new_cardinality;
+}
+
+void roaring64_bitmap_add_bulk(roaring64_bitmap_t *r,
+                               roaring64_bulk_context_t *context,
+                               uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    leaf_t *leaf = context->leaf;
+    if (leaf != NULL && compare_high48(context->high_bytes, high48) == 0) {
+        // We're at a container with the correct high bits.
+        uint8_t typecode1 = get_typecode(*leaf);
+        container_t *container1 = get_container(r, *leaf);
+        uint8_t typecode2;
+        container_t *container2 =
+            container_add(container1, low16, typecode1, &typecode2);
+        if (container2 != container1) {
+            container_free(container1, typecode1);
+            replace_container(r, leaf, container2, typecode2);
+        }
+    } else {
+        // We're not positioned anywhere yet or the high bits of the key
+        // differ.
+        leaf = (leaf_t *)art_find(&r->art, high48);
+        context->leaf =
+            containerptr_roaring64_bitmap_add(r, high48, low16, leaf);
+        memcpy(context->high_bytes, high48, ART_KEY_BYTES);
+    }
+}
+
+void roaring64_bitmap_add_many(roaring64_bitmap_t *r, size_t n_args,
+                               const uint64_t *vals) {
+    if (n_args == 0) {
+        return;
+    }
+    const uint64_t *end = vals + n_args;
+    roaring64_bulk_context_t context = CROARING_ZERO_INITIALIZER;
+    for (const uint64_t *current_val = vals; current_val != end;
+         current_val++) {
+        roaring64_bitmap_add_bulk(r, &context, *current_val);
+    }
+}
+
+static inline void add_range_closed_at(roaring64_bitmap_t *r, art_t *art,
+                                       uint8_t *high48, uint16_t min,
+                                       uint16_t max) {
+    leaf_t *leaf = (leaf_t *)art_find(art, high48);
+    if (leaf != NULL) {
+        uint8_t typecode1 = get_typecode(*leaf);
+        container_t *container1 = get_container(r, *leaf);
+        uint8_t typecode2;
+        container_t *container2 =
+            container_add_range(container1, typecode1, min, max, &typecode2);
+        if (container2 != container1) {
+            container_free(container1, typecode1);
+            replace_container(r, leaf, container2, typecode2);
+        }
+        return;
+    }
+    uint8_t typecode;
+    // container_add_range is inclusive, but `container_range_of_ones` is
+    // exclusive.
+    container_t *container = container_range_of_ones(min, max + 1, &typecode);
+    leaf_t new_leaf = add_container(r, container, typecode);
+    art_insert(art, high48, (art_val_t)new_leaf);
+}
+
+void roaring64_bitmap_add_range(roaring64_bitmap_t *r, uint64_t min,
+                                uint64_t max) {
+    if (min >= max) {
+        return;
+    }
+    roaring64_bitmap_add_range_closed(r, min, max - 1);
+}
+
+void roaring64_bitmap_add_range_closed(roaring64_bitmap_t *r, uint64_t min,
+                                       uint64_t max) {
+    if (min > max) {
+        return;
+    }
+
+    art_t *art = &r->art;
+    uint8_t min_high48[ART_KEY_BYTES];
+    uint16_t min_low16 = split_key(min, min_high48);
+    uint8_t max_high48[ART_KEY_BYTES];
+    uint16_t max_low16 = split_key(max, max_high48);
+    if (compare_high48(min_high48, max_high48) == 0) {
+        // Only populate range within one container.
+        add_range_closed_at(r, art, min_high48, min_low16, max_low16);
+        return;
+    }
+
+    // Populate a range across containers. Fill intermediate containers
+    // entirely.
+    add_range_closed_at(r, art, min_high48, min_low16, 0xffff);
+    uint64_t min_high_bits = min >> 16;
+    uint64_t max_high_bits = max >> 16;
+    for (uint64_t current = min_high_bits + 1; current < max_high_bits;
+         ++current) {
+        uint8_t current_high48[ART_KEY_BYTES];
+        split_key(current << 16, current_high48);
+        add_range_closed_at(r, art, current_high48, 0, 0xffff);
+    }
+    add_range_closed_at(r, art, max_high48, 0, max_low16);
+}
+
+bool roaring64_bitmap_contains(const roaring64_bitmap_t *r, uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    leaf_t *leaf = (leaf_t *)art_find(&r->art, high48);
+    if (leaf != NULL) {
+        return container_contains(get_container(r, *leaf), low16,
+                                  get_typecode(*leaf));
+    }
+    return false;
+}
+
+bool roaring64_bitmap_contains_range(const roaring64_bitmap_t *r, uint64_t min,
+                                     uint64_t max) {
+    if (min >= max) {
+        return true;
+    }
+
+    uint8_t min_high48[ART_KEY_BYTES];
+    uint16_t min_low16 = split_key(min, min_high48);
+    uint8_t max_high48[ART_KEY_BYTES];
+    uint16_t max_low16 = split_key(max, max_high48);
+    uint64_t max_high48_bits = (max - 1) & 0xFFFFFFFFFFFF0000;  // Inclusive
+
+    art_iterator_t it = art_lower_bound((art_t *)&r->art, min_high48);
+    if (it.value == NULL || combine_key(it.key, 0) > min) {
+        return false;
+    }
+    uint64_t prev_high48_bits = min & 0xFFFFFFFFFFFF0000;
+    while (it.value != NULL) {
+        uint64_t current_high48_bits = combine_key(it.key, 0);
+        if (current_high48_bits > max_high48_bits) {
+            // We've passed the end of the range with all containers containing
+            // the range.
+            return true;
+        }
+        if (current_high48_bits - prev_high48_bits > 0x10000) {
+            // There is a gap in the iterator that falls in the range.
+            return false;
+        }
+
+        leaf_t leaf = (leaf_t)*it.value;
+        uint32_t container_min = 0;
+        if (compare_high48(it.key, min_high48) == 0) {
+            container_min = min_low16;
+        }
+        uint32_t container_max = 0xFFFF + 1;  // Exclusive
+        if (compare_high48(it.key, max_high48) == 0) {
+            container_max = max_low16;
+        }
+
+        // For the first and last containers we use container_contains_range,
+        // for the intermediate containers we can use container_is_full.
+        if (container_min == 0 && container_max == 0xFFFF + 1) {
+            if (!container_is_full(get_container(r, leaf),
+                                   get_typecode(leaf))) {
+                return false;
+            }
+        } else if (!container_contains_range(get_container(r, leaf),
+                                             container_min, container_max,
+                                             get_typecode(leaf))) {
+            return false;
+        }
+        prev_high48_bits = current_high48_bits;
+        art_iterator_next(&it);
+    }
+    return prev_high48_bits == max_high48_bits;
+}
+
+bool roaring64_bitmap_contains_bulk(const roaring64_bitmap_t *r,
+                                    roaring64_bulk_context_t *context,
+                                    uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+
+    if (context->leaf == NULL ||
+        art_compare_keys(context->high_bytes, high48) != 0) {
+        // We're not positioned anywhere yet or the high bits of the key
+        // differ.
+        leaf_t *leaf = (leaf_t *)art_find(&r->art, high48);
+        if (leaf == NULL) {
+            return false;
+        }
+        context->leaf = leaf;
+        memcpy(context->high_bytes, high48, ART_KEY_BYTES);
+    }
+    return container_contains(get_container(r, *context->leaf), low16,
+                              get_typecode(*context->leaf));
+}
+
+bool roaring64_bitmap_select(const roaring64_bitmap_t *r, uint64_t rank,
+                             uint64_t *element) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint64_t start_rank = 0;
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint64_t cardinality = container_get_cardinality(get_container(r, leaf),
+                                                         get_typecode(leaf));
+        if (start_rank + cardinality > rank) {
+            uint32_t uint32_start = 0;
+            uint32_t uint32_rank = rank - start_rank;
+            uint32_t uint32_element = 0;
+            if (container_select(get_container(r, leaf), get_typecode(leaf),
+                                 &uint32_start, uint32_rank, &uint32_element)) {
+                *element = combine_key(it.key, (uint16_t)uint32_element);
+                return true;
+            }
+            return false;
+        }
+        start_rank += cardinality;
+        art_iterator_next(&it);
+    }
+    return false;
+}
+
+uint64_t roaring64_bitmap_rank(const roaring64_bitmap_t *r, uint64_t val) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint64_t rank = 0;
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        int compare_result = compare_high48(it.key, high48);
+        if (compare_result < 0) {
+            rank += container_get_cardinality(get_container(r, leaf),
+                                              get_typecode(leaf));
+        } else if (compare_result == 0) {
+            return rank + container_rank(get_container(r, leaf),
+                                         get_typecode(leaf), low16);
+        } else {
+            return rank;
+        }
+        art_iterator_next(&it);
+    }
+    return rank;
+}
+
+bool roaring64_bitmap_get_index(const roaring64_bitmap_t *r, uint64_t val,
+                                uint64_t *out_index) {
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint64_t index = 0;
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        int compare_result = compare_high48(it.key, high48);
+        if (compare_result < 0) {
+            index += container_get_cardinality(get_container(r, leaf),
+                                               get_typecode(leaf));
+        } else if (compare_result == 0) {
+            int index16 = container_get_index(get_container(r, leaf),
+                                              get_typecode(leaf), low16);
+            if (index16 < 0) {
+                return false;
+            }
+            *out_index = index + index16;
+            return true;
+        } else {
+            return false;
+        }
+        art_iterator_next(&it);
+    }
+    return false;
+}
+
+// Returns true if a container was removed.
+static inline bool containerptr_roaring64_bitmap_remove(roaring64_bitmap_t *r,
+                                                        uint8_t *high48,
+                                                        uint16_t low16,
+                                                        leaf_t *leaf) {
+    if (leaf == NULL) {
+        return false;
+    }
+
+    uint8_t typecode = get_typecode(*leaf);
+    container_t *container = get_container(r, *leaf);
+    uint8_t typecode2;
+    container_t *container2 =
+        container_remove(container, low16, typecode, &typecode2);
+    if (container2 != container) {
+        container_free(container, typecode);
+        replace_container(r, leaf, container2, typecode2);
+    }
+    if (!container_nonzero_cardinality(container2, typecode2)) {
+        container_free(container2, typecode2);
+        bool erased = art_erase(&r->art, high48, (art_val_t *)leaf);
+        assert(erased);
+        (void)erased;
+        remove_container(r, *leaf);
+        return true;
+    }
+    return false;
+}
+
+void roaring64_bitmap_remove(roaring64_bitmap_t *r, uint64_t val) {
+    art_t *art = &r->art;
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+
+    leaf_t *leaf = (leaf_t *)art_find(art, high48);
+    containerptr_roaring64_bitmap_remove(r, high48, low16, leaf);
+}
+
+bool roaring64_bitmap_remove_checked(roaring64_bitmap_t *r, uint64_t val) {
+    art_t *art = &r->art;
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    leaf_t *leaf = (leaf_t *)art_find(art, high48);
+
+    if (leaf == NULL) {
+        return false;
+    }
+    int old_cardinality =
+        container_get_cardinality(get_container(r, *leaf), get_typecode(*leaf));
+    if (containerptr_roaring64_bitmap_remove(r, high48, low16, leaf)) {
+        return true;
+    }
+    int new_cardinality =
+        container_get_cardinality(get_container(r, *leaf), get_typecode(*leaf));
+    return new_cardinality != old_cardinality;
+}
+
+void roaring64_bitmap_remove_bulk(roaring64_bitmap_t *r,
+                                  roaring64_bulk_context_t *context,
+                                  uint64_t val) {
+    art_t *art = &r->art;
+    uint8_t high48[ART_KEY_BYTES];
+    uint16_t low16 = split_key(val, high48);
+    if (context->leaf != NULL &&
+        compare_high48(context->high_bytes, high48) == 0) {
+        // We're at a container with the correct high bits.
+        uint8_t typecode = get_typecode(*context->leaf);
+        container_t *container = get_container(r, *context->leaf);
+        uint8_t typecode2;
+        container_t *container2 =
+            container_remove(container, low16, typecode, &typecode2);
+        if (container2 != container) {
+            container_free(container, typecode);
+            replace_container(r, context->leaf, container2, typecode2);
+        }
+        if (!container_nonzero_cardinality(container2, typecode2)) {
+            container_free(container2, typecode2);
+            leaf_t leaf;
+            bool erased = art_erase(art, high48, (art_val_t *)&leaf);
+            assert(erased);
+            (void)erased;
+            remove_container(r, leaf);
+            context->leaf = NULL;
+        }
+    } else {
+        // We're not positioned anywhere yet or the high bits of the key
+        // differ.
+        leaf_t *leaf = (leaf_t *)art_find(art, high48);
+        containerptr_roaring64_bitmap_remove(r, high48, low16, leaf);
+        context->leaf = leaf;
+        memcpy(context->high_bytes, high48, ART_KEY_BYTES);
+    }
+}
+
+void roaring64_bitmap_remove_many(roaring64_bitmap_t *r, size_t n_args,
+                                  const uint64_t *vals) {
+    if (n_args == 0) {
+        return;
+    }
+    const uint64_t *end = vals + n_args;
+    roaring64_bulk_context_t context = CROARING_ZERO_INITIALIZER;
+    for (const uint64_t *current_val = vals; current_val != end;
+         current_val++) {
+        roaring64_bitmap_remove_bulk(r, &context, *current_val);
+    }
+}
+
+static inline void remove_range_closed_at(roaring64_bitmap_t *r, art_t *art,
+                                          uint8_t *high48, uint16_t min,
+                                          uint16_t max) {
+    leaf_t *leaf = (leaf_t *)art_find(art, high48);
+    if (leaf == NULL) {
+        return;
+    }
+    uint8_t typecode = get_typecode(*leaf);
+    container_t *container = get_container(r, *leaf);
+    uint8_t typecode2;
+    container_t *container2 =
+        container_remove_range(container, typecode, min, max, &typecode2);
+    if (container2 != container) {
+        container_free(container, typecode);
+        if (container2 != NULL) {
+            replace_container(r, leaf, container2, typecode2);
+        } else {
+            bool erased = art_erase(art, high48, NULL);
+            assert(erased);
+            (void)erased;
+            remove_container(r, *leaf);
+        }
+    }
+}
+
+void roaring64_bitmap_remove_range(roaring64_bitmap_t *r, uint64_t min,
+                                   uint64_t max) {
+    if (min >= max) {
+        return;
+    }
+    roaring64_bitmap_remove_range_closed(r, min, max - 1);
+}
+
+void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t *r, uint64_t min,
+                                          uint64_t max) {
+    if (min > max) {
+        return;
+    }
+
+    art_t *art = &r->art;
+    uint8_t min_high48[ART_KEY_BYTES];
+    uint16_t min_low16 = split_key(min, min_high48);
+    uint8_t max_high48[ART_KEY_BYTES];
+    uint16_t max_low16 = split_key(max, max_high48);
+    if (compare_high48(min_high48, max_high48) == 0) {
+        // Only remove a range within one container.
+        remove_range_closed_at(r, art, min_high48, min_low16, max_low16);
+        return;
+    }
+
+    // Remove a range across containers. Remove intermediate containers
+    // entirely.
+    remove_range_closed_at(r, art, min_high48, min_low16, 0xffff);
+
+    art_iterator_t it = art_upper_bound(art, min_high48);
+    while (it.value != NULL && art_compare_keys(it.key, max_high48) < 0) {
+        leaf_t leaf;
+        bool erased = art_iterator_erase(&it, (art_val_t *)&leaf);
+        assert(erased);
+        (void)erased;
+        container_free(get_container(r, leaf), get_typecode(leaf));
+        remove_container(r, leaf);
+    }
+    remove_range_closed_at(r, art, max_high48, 0, max_low16);
+}
+
+void roaring64_bitmap_clear(roaring64_bitmap_t *r) {
+    roaring64_bitmap_remove_range_closed(r, 0, UINT64_MAX);
+}
+
+uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint64_t cardinality = 0;
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        cardinality += container_get_cardinality(get_container(r, leaf),
+                                                 get_typecode(leaf));
+        art_iterator_next(&it);
+    }
+    return cardinality;
+}
+
+uint64_t roaring64_bitmap_range_cardinality(const roaring64_bitmap_t *r,
+                                            uint64_t min, uint64_t max) {
+    if (min >= max) {
+        return 0;
+    }
+    // Convert to a closed range
+    // No underflow here: passing the above condition implies min < max, so
+    // there is a number less than max
+    return roaring64_bitmap_range_closed_cardinality(r, min, max - 1);
+}
+
+uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t *r,
+                                                   uint64_t min, uint64_t max) {
+    if (min > max) {
+        return 0;
+    }
+
+    uint64_t cardinality = 0;
+    uint8_t min_high48[ART_KEY_BYTES];
+    uint16_t min_low16 = split_key(min, min_high48);
+    uint8_t max_high48[ART_KEY_BYTES];
+    uint16_t max_low16 = split_key(max, max_high48);
+
+    art_iterator_t it = art_lower_bound((art_t *)&r->art, min_high48);
+    while (it.value != NULL) {
+        int max_compare_result = compare_high48(it.key, max_high48);
+        if (max_compare_result > 0) {
+            // We're outside the range.
+            break;
+        }
+
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t typecode = get_typecode(leaf);
+        container_t *container = get_container(r, leaf);
+        if (max_compare_result == 0) {
+            // We're at the max high key, add only the range up to the low
+            // 16 bits of max.
+            cardinality += container_rank(container, typecode, max_low16);
+        } else {
+            // We're not yet at the max high key, add the full container
+            // range.
+            cardinality += container_get_cardinality(container, typecode);
+        }
+        if (compare_high48(it.key, min_high48) == 0 && min_low16 > 0) {
+            // We're at the min high key, remove the range up to the low 16
+            // bits of min.
+            cardinality -= container_rank(container, typecode, min_low16 - 1);
+        }
+        art_iterator_next(&it);
+    }
+    return cardinality;
+}
+
+bool roaring64_bitmap_is_empty(const roaring64_bitmap_t *r) {
+    return art_is_empty(&r->art);
+}
+
+uint64_t roaring64_bitmap_minimum(const roaring64_bitmap_t *r) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    if (it.value == NULL) {
+        return UINT64_MAX;
+    }
+    leaf_t leaf = (leaf_t)*it.value;
+    return combine_key(
+        it.key, container_minimum(get_container(r, leaf), get_typecode(leaf)));
+}
+
+uint64_t roaring64_bitmap_maximum(const roaring64_bitmap_t *r) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/false);
+    if (it.value == NULL) {
+        return 0;
+    }
+    leaf_t leaf = (leaf_t)*it.value;
+    return combine_key(
+        it.key, container_maximum(get_container(r, leaf), get_typecode(leaf)));
+}
+
+bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r) {
+    art_iterator_t it = art_init_iterator(&r->art, /*first=*/true);
+    bool has_run_container = false;
+    while (it.value != NULL) {
+        leaf_t *leaf = (leaf_t *)it.value;
+        uint8_t new_typecode;
+        // We don't need to free the existing container if a new one was
+        // created, convert_run_optimize does that internally.
+        container_t *new_container = convert_run_optimize(
+            get_container(r, *leaf), get_typecode(*leaf), &new_typecode);
+        replace_container(r, leaf, new_container, new_typecode);
+        has_run_container |= new_typecode == RUN_CONTAINER_TYPE;
+        art_iterator_next(&it);
+    }
+    return has_run_container;
+}
+
+static void move_to_shrink(roaring64_bitmap_t *r, leaf_t *leaf) {
+    uint64_t idx = get_index(*leaf);
+    if (idx < r->first_free) {
+        return;
+    }
+    r->containers[r->first_free] = get_container(r, *leaf);
+    r->containers[idx] = NULL;
+    *leaf = create_leaf(r->first_free, get_typecode(*leaf));
+    r->first_free = next_free_container_idx(r);
+}
+
+static inline bool is_shrunken(const roaring64_bitmap_t *r) {
+    return art_is_shrunken(&r->art) && r->first_free == r->capacity;
+}
+
+size_t roaring64_bitmap_shrink_to_fit(roaring64_bitmap_t *r) {
+    size_t freed = art_shrink_to_fit(&r->art);
+    art_iterator_t it = art_init_iterator(&r->art, true);
+    while (it.value != NULL) {
+        leaf_t *leaf = (leaf_t *)it.value;
+        freed += container_shrink_to_fit(get_container(r, *leaf),
+                                         get_typecode(*leaf));
+        move_to_shrink(r, leaf);
+        art_iterator_next(&it);
+    }
+    if (is_shrunken(r)) {
+        return freed;
+    }
+    uint64_t new_capacity = r->first_free;
+    if (new_capacity < r->capacity) {
+        r->containers = (container_t **)roaring_realloc(
+            r->containers, new_capacity * sizeof(container_t *));
+        freed += (r->capacity - new_capacity) * sizeof(container_t *);
+        r->capacity = new_capacity;
+    }
+    return freed;
+}
+
+/**
+ *  (For advanced users.)
+ * Collect statistics about the bitmap
+ */
+void roaring64_bitmap_statistics(const roaring64_bitmap_t *r,
+                                 roaring64_statistics_t *stat) {
+    memset(stat, 0, sizeof(*stat));
+    stat->min_value = roaring64_bitmap_minimum(r);
+    stat->max_value = roaring64_bitmap_maximum(r);
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        stat->n_containers++;
+        uint8_t truetype =
+            get_container_type(get_container(r, leaf), get_typecode(leaf));
+        uint32_t card = container_get_cardinality(get_container(r, leaf),
+                                                  get_typecode(leaf));
+        uint32_t sbytes =
+            container_size_in_bytes(get_container(r, leaf), get_typecode(leaf));
+        stat->cardinality += card;
+        switch (truetype) {
+            case BITSET_CONTAINER_TYPE:
+                stat->n_bitset_containers++;
+                stat->n_values_bitset_containers += card;
+                stat->n_bytes_bitset_containers += sbytes;
+                break;
+            case ARRAY_CONTAINER_TYPE:
+                stat->n_array_containers++;
+                stat->n_values_array_containers += card;
+                stat->n_bytes_array_containers += sbytes;
+                break;
+            case RUN_CONTAINER_TYPE:
+                stat->n_run_containers++;
+                stat->n_values_run_containers += card;
+                stat->n_bytes_run_containers += sbytes;
+                break;
+            default:
+                assert(false);
+                roaring_unreachable;
+        }
+        art_iterator_next(&it);
+    }
+}
+
+static bool roaring64_leaf_internal_validate(const art_val_t val,
+                                             const char **reason,
+                                             void *context) {
+    leaf_t leaf = (leaf_t)val;
+    roaring64_bitmap_t *r = (roaring64_bitmap_t *)context;
+    return container_internal_validate(get_container(r, leaf),
+                                       get_typecode(leaf), reason);
+}
+
+bool roaring64_bitmap_internal_validate(const roaring64_bitmap_t *r,
+                                        const char **reason) {
+    return art_internal_validate(&r->art, reason,
+                                 roaring64_leaf_internal_validate, (void *)r);
+}
+
+bool roaring64_bitmap_equals(const roaring64_bitmap_t *r1,
+                             const roaring64_bitmap_t *r2) {
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL && it2.value != NULL) {
+        if (compare_high48(it1.key, it2.key) != 0) {
+            return false;
+        }
+        leaf_t leaf1 = (leaf_t)*it1.value;
+        leaf_t leaf2 = (leaf_t)*it2.value;
+        if (!container_equals(get_container(r1, leaf1), get_typecode(leaf1),
+                              get_container(r2, leaf2), get_typecode(leaf2))) {
+            return false;
+        }
+        art_iterator_next(&it1);
+        art_iterator_next(&it2);
+    }
+    return it1.value == NULL && it2.value == NULL;
+}
+
+bool roaring64_bitmap_is_subset(const roaring64_bitmap_t *r1,
+                                const roaring64_bitmap_t *r2) {
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL) {
+        bool it2_present = it2.value != NULL;
+
+        int compare_result = 0;
+        if (it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                leaf_t leaf1 = (leaf_t)*it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                if (!container_is_subset(
+                        get_container(r1, leaf1), get_typecode(leaf1),
+                        get_container(r2, leaf2), get_typecode(leaf2))) {
+                    return false;
+                }
+                art_iterator_next(&it1);
+                art_iterator_next(&it2);
+            }
+        }
+        if (!it2_present || compare_result < 0) {
+            return false;
+        } else if (compare_result > 0) {
+            art_iterator_lower_bound(&it2, it1.key);
+        }
+    }
+    return true;
+}
+
+bool roaring64_bitmap_is_strict_subset(const roaring64_bitmap_t *r1,
+                                       const roaring64_bitmap_t *r2) {
+    return roaring64_bitmap_get_cardinality(r1) <
+               roaring64_bitmap_get_cardinality(r2) &&
+           roaring64_bitmap_is_subset(r1, r2);
+}
+
+roaring64_bitmap_t *roaring64_bitmap_and(const roaring64_bitmap_t *r1,
+                                         const roaring64_bitmap_t *r2) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL && it2.value != NULL) {
+        // Cases:
+        // 1. it1 <  it2 -> it1++
+        // 2. it1 == it1 -> output it1 & it2, it1++, it2++
+        // 3. it1 >  it2 -> it2++
+        int compare_result = compare_high48(it1.key, it2.key);
+        if (compare_result == 0) {
+            // Case 2: iterators at the same high key position.
+            leaf_t leaf1 = (leaf_t)*it1.value;
+            leaf_t leaf2 = (leaf_t)*it2.value;
+            uint8_t result_typecode;
+            container_t *result_container =
+                container_and(get_container(r1, leaf1), get_typecode(leaf1),
+                              get_container(r2, leaf2), get_typecode(leaf2),
+                              &result_typecode);
+            if (container_nonzero_cardinality(result_container,
+                                              result_typecode)) {
+                leaf_t result_leaf =
+                    add_container(result, result_container, result_typecode);
+                art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+            } else {
+                container_free(result_container, result_typecode);
+            }
+            art_iterator_next(&it1);
+            art_iterator_next(&it2);
+        } else if (compare_result < 0) {
+            // Case 1: it1 is before it2.
+            art_iterator_lower_bound(&it1, it2.key);
+        } else {
+            // Case 3: it2 is before it1.
+            art_iterator_lower_bound(&it2, it1.key);
+        }
+    }
+    return result;
+}
+
+uint64_t roaring64_bitmap_and_cardinality(const roaring64_bitmap_t *r1,
+                                          const roaring64_bitmap_t *r2) {
+    uint64_t result = 0;
+
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL && it2.value != NULL) {
+        // Cases:
+        // 1. it1 <  it2 -> it1++
+        // 2. it1 == it1 -> output cardinaltiy it1 & it2, it1++, it2++
+        // 3. it1 >  it2 -> it2++
+        int compare_result = compare_high48(it1.key, it2.key);
+        if (compare_result == 0) {
+            // Case 2: iterators at the same high key position.
+            leaf_t leaf1 = (leaf_t)*it1.value;
+            leaf_t leaf2 = (leaf_t)*it2.value;
+            result += container_and_cardinality(
+                get_container(r1, leaf1), get_typecode(leaf1),
+                get_container(r2, leaf2), get_typecode(leaf2));
+            art_iterator_next(&it1);
+            art_iterator_next(&it2);
+        } else if (compare_result < 0) {
+            // Case 1: it1 is before it2.
+            art_iterator_lower_bound(&it1, it2.key);
+        } else {
+            // Case 3: it2 is before it1.
+            art_iterator_lower_bound(&it2, it1.key);
+        }
+    }
+    return result;
+}
+
+// Inplace and (modifies its first argument).
+void roaring64_bitmap_and_inplace(roaring64_bitmap_t *r1,
+                                  const roaring64_bitmap_t *r2) {
+    if (r1 == r2) {
+        return;
+    }
+    art_iterator_t it1 = art_init_iterator(&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL) {
+        // Cases:
+        // 1. !it2_present -> erase it1
+        // 2. it2_present
+        //    a. it1 <  it2 -> erase it1
+        //    b. it1 == it2 -> output it1 & it2, it1++, it2++
+        //    c. it1 >  it2 -> it2++
+        bool it2_present = it2.value != NULL;
+        int compare_result = 0;
+        if (it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 2a: iterators at the same high key position.
+                leaf_t *leaf1 = (leaf_t *)it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+
+                // We do the computation "in place" only when c1 is not a
+                // shared container. Rationale: using a shared container
+                // safely with in place computation would require making a
+                // copy and then doing the computation in place which is
+                // likely less efficient than avoiding in place entirely and
+                // always generating a new container.
+                uint8_t typecode = get_typecode(*leaf1);
+                container_t *container = get_container(r1, *leaf1);
+                uint8_t typecode2;
+                container_t *container2;
+                if (typecode == SHARED_CONTAINER_TYPE) {
+                    container2 = container_and(container, typecode,
+                                               get_container(r2, leaf2),
+                                               get_typecode(leaf2), &typecode2);
+                } else {
+                    container2 = container_iand(
+                        container, typecode, get_container(r2, leaf2),
+                        get_typecode(leaf2), &typecode2);
+                }
+
+                if (container2 != container) {
+                    container_free(container, typecode);
+                }
+                if (!container_nonzero_cardinality(container2, typecode2)) {
+                    container_free(container2, typecode2);
+                    art_iterator_erase(&it1, NULL);
+                    remove_container(r1, *leaf1);
+                } else {
+                    if (container2 != container) {
+                        replace_container(r1, leaf1, container2, typecode2);
+                    }
+                    // Only advance the iterator if we didn't delete the
+                    // leaf, as erasing advances by itself.
+                    art_iterator_next(&it1);
+                }
+                art_iterator_next(&it2);
+            }
+        }
+
+        if (!it2_present || compare_result < 0) {
+            // Cases 1 and 3a: it1 is the only iterator or is before it2.
+            leaf_t leaf;
+            bool erased = art_iterator_erase(&it1, (art_val_t *)&leaf);
+            assert(erased);
+            (void)erased;
+            container_free(get_container(r1, leaf), get_typecode(leaf));
+            remove_container(r1, leaf);
+        } else if (compare_result > 0) {
+            // Case 2c: it1 is after it2.
+            art_iterator_lower_bound(&it2, it1.key);
+        }
+    }
+}
+
+bool roaring64_bitmap_intersect(const roaring64_bitmap_t *r1,
+                                const roaring64_bitmap_t *r2) {
+    bool intersect = false;
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL && it2.value != NULL) {
+        // Cases:
+        // 1. it1 <  it2 -> it1++
+        // 2. it1 == it1 -> intersect |= it1 & it2, it1++, it2++
+        // 3. it1 >  it2 -> it2++
+        int compare_result = compare_high48(it1.key, it2.key);
+        if (compare_result == 0) {
+            // Case 2: iterators at the same high key position.
+            leaf_t leaf1 = (leaf_t)*it1.value;
+            leaf_t leaf2 = (leaf_t)*it2.value;
+            intersect |= container_intersect(
+                get_container(r1, leaf1), get_typecode(leaf1),
+                get_container(r2, leaf2), get_typecode(leaf2));
+            art_iterator_next(&it1);
+            art_iterator_next(&it2);
+        } else if (compare_result < 0) {
+            // Case 1: it1 is before it2.
+            art_iterator_lower_bound(&it1, it2.key);
+        } else {
+            // Case 3: it2 is before it1.
+            art_iterator_lower_bound(&it2, it1.key);
+        }
+    }
+    return intersect;
+}
+
+bool roaring64_bitmap_intersect_with_range(const roaring64_bitmap_t *r,
+                                           uint64_t min, uint64_t max) {
+    if (min >= max) {
+        return false;
+    }
+    roaring64_iterator_t it;
+    roaring64_iterator_init_at(r, &it, /*first=*/true);
+    if (!roaring64_iterator_move_equalorlarger(&it, min)) {
+        return false;
+    }
+    return roaring64_iterator_has_value(&it) &&
+           roaring64_iterator_value(&it) < max;
+}
+
+double roaring64_bitmap_jaccard_index(const roaring64_bitmap_t *r1,
+                                      const roaring64_bitmap_t *r2) {
+    uint64_t c1 = roaring64_bitmap_get_cardinality(r1);
+    uint64_t c2 = roaring64_bitmap_get_cardinality(r2);
+    uint64_t inter = roaring64_bitmap_and_cardinality(r1, r2);
+    return (double)inter / (double)(c1 + c2 - inter);
+}
+
+roaring64_bitmap_t *roaring64_bitmap_or(const roaring64_bitmap_t *r1,
+                                        const roaring64_bitmap_t *r2) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL || it2.value != NULL) {
+        bool it1_present = it1.value != NULL;
+        bool it2_present = it2.value != NULL;
+
+        // Cases:
+        // 1. it1_present  && !it2_present -> output it1, it1++
+        // 2. !it1_present && it2_present  -> output it2, it2++
+        // 3. it1_present  && it2_present
+        //    a. it1 <  it2 -> output it1, it1++
+        //    b. it1 == it2 -> output it1 | it2, it1++, it2++
+        //    c. it1 >  it2 -> output it2, it2++
+        int compare_result = 0;
+        if (it1_present && it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 3b: iterators at the same high key position.
+                leaf_t leaf1 = (leaf_t)*it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t result_typecode;
+                container_t *result_container =
+                    container_or(get_container(r1, leaf1), get_typecode(leaf1),
+                                 get_container(r2, leaf2), get_typecode(leaf2),
+                                 &result_typecode);
+                leaf_t result_leaf =
+                    add_container(result, result_container, result_typecode);
+                art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+                art_iterator_next(&it1);
+                art_iterator_next(&it2);
+            }
+        }
+        if ((it1_present && !it2_present) || compare_result < 0) {
+            // Cases 1 and 3a: it1 is the only iterator or is before it2.
+            leaf_t result_leaf =
+                copy_leaf_container(r1, result, (leaf_t)*it1.value);
+            art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+            art_iterator_next(&it1);
+        } else if ((!it1_present && it2_present) || compare_result > 0) {
+            // Cases 2 and 3c: it2 is the only iterator or is before it1.
+            leaf_t result_leaf =
+                copy_leaf_container(r2, result, (leaf_t)*it2.value);
+            art_insert(&result->art, it2.key, (art_val_t)result_leaf);
+            art_iterator_next(&it2);
+        }
+    }
+    return result;
+}
+
+uint64_t roaring64_bitmap_or_cardinality(const roaring64_bitmap_t *r1,
+                                         const roaring64_bitmap_t *r2) {
+    uint64_t c1 = roaring64_bitmap_get_cardinality(r1);
+    uint64_t c2 = roaring64_bitmap_get_cardinality(r2);
+    uint64_t inter = roaring64_bitmap_and_cardinality(r1, r2);
+    return c1 + c2 - inter;
+}
+
+void roaring64_bitmap_or_inplace(roaring64_bitmap_t *r1,
+                                 const roaring64_bitmap_t *r2) {
+    if (r1 == r2) {
+        return;
+    }
+    art_iterator_t it1 = art_init_iterator(&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL || it2.value != NULL) {
+        bool it1_present = it1.value != NULL;
+        bool it2_present = it2.value != NULL;
+
+        // Cases:
+        // 1. it1_present  && !it2_present -> it1++
+        // 2. !it1_present && it2_present  -> add it2, it2++
+        // 3. it1_present  && it2_present
+        //    a. it1 <  it2 -> it1++
+        //    b. it1 == it2 -> it1 | it2, it1++, it2++
+        //    c. it1 >  it2 -> add it2, it2++
+        int compare_result = 0;
+        if (it1_present && it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 3b: iterators at the same high key position.
+                leaf_t *leaf1 = (leaf_t *)it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t typecode1 = get_typecode(*leaf1);
+                container_t *container1 = get_container(r1, *leaf1);
+                uint8_t typecode2;
+                container_t *container2;
+                if (get_typecode(*leaf1) == SHARED_CONTAINER_TYPE) {
+                    container2 = container_or(container1, typecode1,
+                                              get_container(r2, leaf2),
+                                              get_typecode(leaf2), &typecode2);
+                } else {
+                    container2 = container_ior(container1, typecode1,
+                                               get_container(r2, leaf2),
+                                               get_typecode(leaf2), &typecode2);
+                }
+                if (container2 != container1) {
+                    container_free(container1, typecode1);
+                    replace_container(r1, leaf1, container2, typecode2);
+                }
+                art_iterator_next(&it1);
+                art_iterator_next(&it2);
+            }
+        }
+        if ((it1_present && !it2_present) || compare_result < 0) {
+            // Cases 1 and 3a: it1 is the only iterator or is before it2.
+            art_iterator_next(&it1);
+        } else if ((!it1_present && it2_present) || compare_result > 0) {
+            // Cases 2 and 3c: it2 is the only iterator or is before it1.
+            leaf_t result_leaf =
+                copy_leaf_container(r2, r1, (leaf_t)*it2.value);
+            art_iterator_insert(&it1, it2.key, (art_val_t)result_leaf);
+            art_iterator_next(&it2);
+        }
+    }
+}
+
+roaring64_bitmap_t *roaring64_bitmap_xor(const roaring64_bitmap_t *r1,
+                                         const roaring64_bitmap_t *r2) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL || it2.value != NULL) {
+        bool it1_present = it1.value != NULL;
+        bool it2_present = it2.value != NULL;
+
+        // Cases:
+        // 1. it1_present  && !it2_present -> output it1, it1++
+        // 2. !it1_present && it2_present  -> output it2, it2++
+        // 3. it1_present  && it2_present
+        //    a. it1 <  it2 -> output it1, it1++
+        //    b. it1 == it2 -> output it1 ^ it2, it1++, it2++
+        //    c. it1 >  it2 -> output it2, it2++
+        int compare_result = 0;
+        if (it1_present && it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 3b: iterators at the same high key position.
+                leaf_t leaf1 = (leaf_t)*it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t result_typecode;
+                container_t *result_container =
+                    container_xor(get_container(r1, leaf1), get_typecode(leaf1),
+                                  get_container(r2, leaf2), get_typecode(leaf2),
+                                  &result_typecode);
+                if (container_nonzero_cardinality(result_container,
+                                                  result_typecode)) {
+                    leaf_t result_leaf = add_container(result, result_container,
+                                                       result_typecode);
+                    art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+                } else {
+                    container_free(result_container, result_typecode);
+                }
+                art_iterator_next(&it1);
+                art_iterator_next(&it2);
+            }
+        }
+        if ((it1_present && !it2_present) || compare_result < 0) {
+            // Cases 1 and 3a: it1 is the only iterator or is before it2.
+            leaf_t result_leaf =
+                copy_leaf_container(r1, result, (leaf_t)*it1.value);
+            art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+            art_iterator_next(&it1);
+        } else if ((!it1_present && it2_present) || compare_result > 0) {
+            // Cases 2 and 3c: it2 is the only iterator or is before it1.
+            leaf_t result_leaf =
+                copy_leaf_container(r2, result, (leaf_t)*it2.value);
+            art_insert(&result->art, it2.key, (art_val_t)result_leaf);
+            art_iterator_next(&it2);
+        }
+    }
+    return result;
+}
+
+uint64_t roaring64_bitmap_xor_cardinality(const roaring64_bitmap_t *r1,
+                                          const roaring64_bitmap_t *r2) {
+    uint64_t c1 = roaring64_bitmap_get_cardinality(r1);
+    uint64_t c2 = roaring64_bitmap_get_cardinality(r2);
+    uint64_t inter = roaring64_bitmap_and_cardinality(r1, r2);
+    return c1 + c2 - 2 * inter;
+}
+
+void roaring64_bitmap_xor_inplace(roaring64_bitmap_t *r1,
+                                  const roaring64_bitmap_t *r2) {
+    assert(r1 != r2);
+    art_iterator_t it1 = art_init_iterator(&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL || it2.value != NULL) {
+        bool it1_present = it1.value != NULL;
+        bool it2_present = it2.value != NULL;
+
+        // Cases:
+        // 1.  it1_present && !it2_present -> it1++
+        // 2. !it1_present &&  it2_present -> add it2, it2++
+        // 3.  it1_present &&  it2_present
+        //    a. it1 <  it2 -> it1++
+        //    b. it1 == it2 -> it1 ^ it2, it1++, it2++
+        //    c. it1 >  it2 -> add it2, it2++
+        int compare_result = 0;
+        if (it1_present && it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 3b: iterators at the same high key position.
+                leaf_t *leaf1 = (leaf_t *)it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t typecode1 = get_typecode(*leaf1);
+                container_t *container1 = get_container(r1, *leaf1);
+                uint8_t typecode2;
+                container_t *container2;
+                if (typecode1 == SHARED_CONTAINER_TYPE) {
+                    container2 = container_xor(container1, typecode1,
+                                               get_container(r2, leaf2),
+                                               get_typecode(leaf2), &typecode2);
+                    if (container2 != container1) {
+                        // We only free when doing container_xor, not
+                        // container_ixor, as ixor frees the original
+                        // internally.
+                        container_free(container1, typecode1);
+                    }
+                } else {
+                    container2 = container_ixor(
+                        container1, typecode1, get_container(r2, leaf2),
+                        get_typecode(leaf2), &typecode2);
+                }
+
+                if (!container_nonzero_cardinality(container2, typecode2)) {
+                    container_free(container2, typecode2);
+                    bool erased = art_iterator_erase(&it1, NULL);
+                    assert(erased);
+                    (void)erased;
+                    remove_container(r1, *leaf1);
+                } else {
+                    if (container2 != container1) {
+                        replace_container(r1, leaf1, container2, typecode2);
+                    }
+                    // Only advance the iterator if we didn't delete the
+                    // leaf, as erasing advances by itself.
+                    art_iterator_next(&it1);
+                }
+                art_iterator_next(&it2);
+            }
+        }
+        if ((it1_present && !it2_present) || compare_result < 0) {
+            // Cases 1 and 3a: it1 is the only iterator or is before it2.
+            art_iterator_next(&it1);
+        } else if ((!it1_present && it2_present) || compare_result > 0) {
+            // Cases 2 and 3c: it2 is the only iterator or is before it1.
+            leaf_t result_leaf =
+                copy_leaf_container(r2, r1, (leaf_t)*it2.value);
+            if (it1_present) {
+                art_iterator_insert(&it1, it2.key, (art_val_t)result_leaf);
+                art_iterator_next(&it1);
+            } else {
+                art_insert(&r1->art, it2.key, (art_val_t)result_leaf);
+            }
+            art_iterator_next(&it2);
+        }
+    }
+}
+
+roaring64_bitmap_t *roaring64_bitmap_andnot(const roaring64_bitmap_t *r1,
+                                            const roaring64_bitmap_t *r2) {
+    roaring64_bitmap_t *result = roaring64_bitmap_create();
+
+    art_iterator_t it1 = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL) {
+        // Cases:
+        // 1. it1_present && !it2_present -> output it1, it1++
+        // 2. it1_present && it2_present
+        //    a. it1 <  it2 -> output it1, it1++
+        //    b. it1 == it2 -> output it1 - it2, it1++, it2++
+        //    c. it1 >  it2 -> it2++
+        bool it2_present = it2.value != NULL;
+        int compare_result = 0;
+        if (it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 2b: iterators at the same high key position.
+                leaf_t *leaf1 = (leaf_t *)it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t result_typecode;
+                container_t *result_container = container_andnot(
+                    get_container(r1, *leaf1), get_typecode(*leaf1),
+                    get_container(r2, leaf2), get_typecode(leaf2),
+                    &result_typecode);
+
+                if (container_nonzero_cardinality(result_container,
+                                                  result_typecode)) {
+                    leaf_t result_leaf = add_container(result, result_container,
+                                                       result_typecode);
+                    art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+                } else {
+                    container_free(result_container, result_typecode);
+                }
+                art_iterator_next(&it1);
+                art_iterator_next(&it2);
+            }
+        }
+        if (!it2_present || compare_result < 0) {
+            // Cases 1 and 2a: it1 is the only iterator or is before it2.
+            leaf_t result_leaf =
+                copy_leaf_container(r1, result, (leaf_t)*it1.value);
+            art_insert(&result->art, it1.key, (art_val_t)result_leaf);
+            art_iterator_next(&it1);
+        } else if (compare_result > 0) {
+            // Case 2c: it1 is after it2.
+            art_iterator_next(&it2);
+        }
+    }
+    return result;
+}
+
+uint64_t roaring64_bitmap_andnot_cardinality(const roaring64_bitmap_t *r1,
+                                             const roaring64_bitmap_t *r2) {
+    uint64_t c1 = roaring64_bitmap_get_cardinality(r1);
+    uint64_t inter = roaring64_bitmap_and_cardinality(r1, r2);
+    return c1 - inter;
+}
+
+void roaring64_bitmap_andnot_inplace(roaring64_bitmap_t *r1,
+                                     const roaring64_bitmap_t *r2) {
+    art_iterator_t it1 = art_init_iterator(&r1->art, /*first=*/true);
+    art_iterator_t it2 = art_init_iterator((art_t *)&r2->art, /*first=*/true);
+
+    while (it1.value != NULL) {
+        // Cases:
+        // 1. it1_present && !it2_present -> it1++
+        // 2. it1_present &&  it2_present
+        //    a. it1 <  it2 -> it1++
+        //    b. it1 == it2 -> it1 - it2, it1++, it2++
+        //    c. it1 >  it2 -> it2++
+        bool it2_present = it2.value != NULL;
+        int compare_result = 0;
+        if (it2_present) {
+            compare_result = compare_high48(it1.key, it2.key);
+            if (compare_result == 0) {
+                // Case 2b: iterators at the same high key position.
+                leaf_t *leaf1 = (leaf_t *)it1.value;
+                leaf_t leaf2 = (leaf_t)*it2.value;
+                uint8_t typecode1 = get_typecode(*leaf1);
+                container_t *container1 = get_container(r1, *leaf1);
+                uint8_t typecode2;
+                container_t *container2;
+                if (typecode1 == SHARED_CONTAINER_TYPE) {
+                    container2 = container_andnot(
+                        container1, typecode1, get_container(r2, leaf2),
+                        get_typecode(leaf2), &typecode2);
+                    if (container2 != container1) {
+                        // We only free when doing container_andnot, not
+                        // container_iandnot, as iandnot frees the original
+                        // internally.
+                        container_free(container1, typecode1);
+                    }
+                } else {
+                    container2 = container_iandnot(
+                        container1, typecode1, get_container(r2, leaf2),
+                        get_typecode(leaf2), &typecode2);
+                }
+
+                if (!container_nonzero_cardinality(container2, typecode2)) {
+                    container_free(container2, typecode2);
+                    bool erased = art_iterator_erase(&it1, NULL);
+                    assert(erased);
+                    (void)erased;
+                    remove_container(r1, *leaf1);
+                } else {
+                    if (container2 != container1) {
+                        replace_container(r1, leaf1, container2, typecode2);
+                    }
+                    // Only advance the iterator if we didn't delete the
+                    // leaf, as erasing advances by itself.
+                    art_iterator_next(&it1);
+                }
+                art_iterator_next(&it2);
+            }
+        }
+        if (!it2_present || compare_result < 0) {
+            // Cases 1 and 2a: it1 is the only iterator or is before it2.
+            art_iterator_next(&it1);
+        } else if (compare_result > 0) {
+            // Case 2c: it1 is after it2.
+            art_iterator_next(&it2);
+        }
+    }
+}
+
+/**
+ * Flips the leaf at high48 in the range [min, max), adding the result to
+ * `r2`. If the high48 key is not found in `r1`, a new container is created.
+ */
+static void roaring64_flip_leaf(const roaring64_bitmap_t *r1,
+                                roaring64_bitmap_t *r2, uint8_t high48[],
+                                uint32_t min, uint32_t max) {
+    leaf_t *leaf1 = (leaf_t *)art_find(&r1->art, high48);
+    uint8_t typecode2;
+    container_t *container2;
+    if (leaf1 == NULL) {
+        // No container at this key, create a full container.
+        container2 = container_range_of_ones(min, max, &typecode2);
+    } else if (min == 0 && max > 0xFFFF) {
+        // Flip whole container.
+        container2 = container_not(get_container(r1, *leaf1),
+                                   get_typecode(*leaf1), &typecode2);
+    } else {
+        // Partially flip a container.
+        container2 =
+            container_not_range(get_container(r1, *leaf1), get_typecode(*leaf1),
+                                min, max, &typecode2);
+    }
+    if (container_nonzero_cardinality(container2, typecode2)) {
+        leaf_t leaf2 = add_container(r2, container2, typecode2);
+        art_insert(&r2->art, high48, (art_val_t)leaf2);
+    } else {
+        container_free(container2, typecode2);
+    }
+}
+
+/**
+ * Flips the leaf at high48 in the range [min, max). If the high48 key is
+ * not found in the bitmap, a new container is created. Deletes the leaf and
+ * associated container if the negation results in an empty range.
+ */
+static void roaring64_flip_leaf_inplace(roaring64_bitmap_t *r, uint8_t high48[],
+                                        uint32_t min, uint32_t max) {
+    leaf_t *leaf = (leaf_t *)art_find(&r->art, high48);
+    container_t *container2;
+    uint8_t typecode2;
+    if (leaf == NULL) {
+        // No container at this key, insert a full container.
+        container2 = container_range_of_ones(min, max, &typecode2);
+        leaf_t new_leaf = add_container(r, container2, typecode2);
+        art_insert(&r->art, high48, (art_val_t)new_leaf);
+        return;
+    }
+
+    if (min == 0 && max > 0xFFFF) {
+        // Flip whole container.
+        container2 = container_inot(get_container(r, *leaf),
+                                    get_typecode(*leaf), &typecode2);
+    } else {
+        // Partially flip a container.
+        container2 = container_inot_range(
+            get_container(r, *leaf), get_typecode(*leaf), min, max, &typecode2);
+    }
+
+    if (container_nonzero_cardinality(container2, typecode2)) {
+        replace_container(r, leaf, container2, typecode2);
+    } else {
+        bool erased = art_erase(&r->art, high48, NULL);
+        assert(erased);
+        (void)erased;
+        container_free(container2, typecode2);
+        remove_container(r, *leaf);
+    }
+}
+
+roaring64_bitmap_t *roaring64_bitmap_flip(const roaring64_bitmap_t *r,
+                                          uint64_t min, uint64_t max) {
+    if (min >= max) {
+        return roaring64_bitmap_copy(r);
+    }
+    return roaring64_bitmap_flip_closed(r, min, max - 1);
+}
+
+roaring64_bitmap_t *roaring64_bitmap_flip_closed(const roaring64_bitmap_t *r1,
+                                                 uint64_t min, uint64_t max) {
+    if (min > max) {
+        return roaring64_bitmap_copy(r1);
+    }
+    uint8_t min_high48_key[ART_KEY_BYTES];
+    uint16_t min_low16 = split_key(min, min_high48_key);
+    uint8_t max_high48_key[ART_KEY_BYTES];
+    uint16_t max_low16 = split_key(max, max_high48_key);
+    uint64_t min_high48_bits = (min & 0xFFFFFFFFFFFF0000ULL) >> 16;
+    uint64_t max_high48_bits = (max & 0xFFFFFFFFFFFF0000ULL) >> 16;
+
+    roaring64_bitmap_t *r2 = roaring64_bitmap_create();
+    art_iterator_t it = art_init_iterator((art_t *)&r1->art, /*first=*/true);
+
+    // Copy the containers before min unchanged.
+    while (it.value != NULL && compare_high48(it.key, min_high48_key) < 0) {
+        leaf_t leaf1 = (leaf_t)*it.value;
+        uint8_t typecode2 = get_typecode(leaf1);
+        container_t *container2 = get_copy_of_container(
+            get_container(r1, leaf1), &typecode2, /*copy_on_write=*/false);
+        leaf_t leaf2 = add_container(r2, container2, typecode2);
+        art_insert(&r2->art, it.key, (art_val_t)leaf2);
+        art_iterator_next(&it);
+    }
+
+    // Flip the range (including non-existent containers!) between min and
+    // max.
+    for (uint64_t high48_bits = min_high48_bits; high48_bits <= max_high48_bits;
+         high48_bits++) {
+        uint8_t current_high48_key[ART_KEY_BYTES];
+        split_key(high48_bits << 16, current_high48_key);
+
+        uint32_t min_container = 0;
+        if (high48_bits == min_high48_bits) {
+            min_container = min_low16;
+        }
+        uint32_t max_container = 0xFFFF + 1;  // Exclusive range.
+        if (high48_bits == max_high48_bits) {
+            max_container = max_low16 + 1;  // Exclusive.
+        }
+
+        roaring64_flip_leaf(r1, r2, current_high48_key, min_container,
+                            max_container);
+    }
+
+    // Copy the containers after max unchanged.
+    it = art_upper_bound((art_t *)&r1->art, max_high48_key);
+    while (it.value != NULL) {
+        leaf_t leaf1 = (leaf_t)*it.value;
+        uint8_t typecode2 = get_typecode(leaf1);
+        container_t *container2 = get_copy_of_container(
+            get_container(r1, leaf1), &typecode2, /*copy_on_write=*/false);
+        leaf_t leaf2 = add_container(r2, container2, typecode2);
+        art_insert(&r2->art, it.key, (art_val_t)leaf2);
+        art_iterator_next(&it);
+    }
+
+    return r2;
+}
+
+void roaring64_bitmap_flip_inplace(roaring64_bitmap_t *r, uint64_t min,
+                                   uint64_t max) {
+    if (min >= max) {
+        return;
+    }
+    roaring64_bitmap_flip_closed_inplace(r, min, max - 1);
+}
+
+void roaring64_bitmap_flip_closed_inplace(roaring64_bitmap_t *r, uint64_t min,
+                                          uint64_t max) {
+    if (min > max) {
+        return;
+    }
+    uint16_t min_low16 = (uint16_t)min;
+    uint16_t max_low16 = (uint16_t)max;
+    uint64_t min_high48_bits = (min & 0xFFFFFFFFFFFF0000ULL) >> 16;
+    uint64_t max_high48_bits = (max & 0xFFFFFFFFFFFF0000ULL) >> 16;
+
+    // Flip the range (including non-existent containers!) between min and
+    // max.
+    for (uint64_t high48_bits = min_high48_bits; high48_bits <= max_high48_bits;
+         high48_bits++) {
+        uint8_t current_high48_key[ART_KEY_BYTES];
+        split_key(high48_bits << 16, current_high48_key);
+
+        uint32_t min_container = 0;
+        if (high48_bits == min_high48_bits) {
+            min_container = min_low16;
+        }
+        uint32_t max_container = 0xFFFF + 1;  // Exclusive range.
+        if (high48_bits == max_high48_bits) {
+            max_container = max_low16 + 1;  // Exclusive.
+        }
+
+        roaring64_flip_leaf_inplace(r, current_high48_key, min_container,
+                                    max_container);
+    }
+}
+
+// Returns the number of distinct high 32-bit entries in the bitmap.
+static inline uint64_t count_high32(const roaring64_bitmap_t *r) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint64_t high32_count = 0;
+    uint32_t prev_high32 = 0;
+    while (it.value != NULL) {
+        uint32_t current_high32 = (uint32_t)(combine_key(it.key, 0) >> 32);
+        if (high32_count == 0 || prev_high32 != current_high32) {
+            high32_count++;
+            prev_high32 = current_high32;
+        }
+        art_iterator_next(&it);
+    }
+    return high32_count;
+}
+
+// Frees the (32-bit!) bitmap without freeing the containers.
+static inline void roaring_bitmap_free_without_containers(roaring_bitmap_t *r) {
+    ra_clear_without_containers(&r->high_low_container);
+    roaring_free(r);
+}
+
+size_t roaring64_bitmap_portable_size_in_bytes(const roaring64_bitmap_t *r) {
+    // https://github.com/RoaringBitmap/RoaringFormatSpec#extension-for-64-bit-implementations
+    size_t size = 0;
+
+    // Write as uint64 the distinct number of "buckets", where a bucket is
+    // defined as the most significant 32 bits of an element.
+    uint64_t high32_count;
+    size += sizeof(high32_count);
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint32_t prev_high32 = 0;
+    roaring_bitmap_t *bitmap32 = NULL;
+
+    // Iterate through buckets ordered by increasing keys.
+    while (it.value != NULL) {
+        uint32_t current_high32 = (uint32_t)(combine_key(it.key, 0) >> 32);
+        if (bitmap32 == NULL || prev_high32 != current_high32) {
+            if (bitmap32 != NULL) {
+                // Write as uint32 the most significant 32 bits of the
+                // bucket.
+                size += sizeof(prev_high32);
+
+                // Write the 32-bit Roaring bitmaps representing the least
+                // significant bits of a set of elements.
+                size += roaring_bitmap_portable_size_in_bytes(bitmap32);
+                roaring_bitmap_free_without_containers(bitmap32);
+            }
+
+            // Start a new 32-bit bitmap with the current high 32 bits.
+            art_iterator_t it2 = it;
+            uint32_t containers_with_high32 = 0;
+            while (it2.value != NULL && (uint32_t)(combine_key(it2.key, 0) >>
+                                                   32) == current_high32) {
+                containers_with_high32++;
+                art_iterator_next(&it2);
+            }
+            bitmap32 =
+                roaring_bitmap_create_with_capacity(containers_with_high32);
+
+            prev_high32 = current_high32;
+        }
+        leaf_t leaf = (leaf_t)*it.value;
+        ra_append(&bitmap32->high_low_container,
+                  (uint16_t)(current_high32 >> 16), get_container(r, leaf),
+                  get_typecode(leaf));
+        art_iterator_next(&it);
+    }
+
+    if (bitmap32 != NULL) {
+        // Write as uint32 the most significant 32 bits of the bucket.
+        size += sizeof(prev_high32);
+
+        // Write the 32-bit Roaring bitmaps representing the least
+        // significant bits of a set of elements.
+        size += roaring_bitmap_portable_size_in_bytes(bitmap32);
+        roaring_bitmap_free_without_containers(bitmap32);
+    }
+
+    return size;
+}
+
+size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r,
+                                           char *buf) {
+    // https://github.com/RoaringBitmap/RoaringFormatSpec#extension-for-64-bit-implementations
+    if (buf == NULL) {
+        return 0;
+    }
+    const char *initial_buf = buf;
+
+    // Write as uint64 the distinct number of "buckets", where a bucket is
+    // defined as the most significant 32 bits of an element.
+    uint64_t high32_count = count_high32(r);
+    memcpy(buf, &high32_count, sizeof(high32_count));
+    buf += sizeof(high32_count);
+
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    uint32_t prev_high32 = 0;
+    roaring_bitmap_t *bitmap32 = NULL;
+
+    // Iterate through buckets ordered by increasing keys.
+    while (it.value != NULL) {
+        uint64_t current_high48 = combine_key(it.key, 0);
+        uint32_t current_high32 = (uint32_t)(current_high48 >> 32);
+        if (bitmap32 == NULL || prev_high32 != current_high32) {
+            if (bitmap32 != NULL) {
+                // Write as uint32 the most significant 32 bits of the
+                // bucket.
+                memcpy(buf, &prev_high32, sizeof(prev_high32));
+                buf += sizeof(prev_high32);
+
+                // Write the 32-bit Roaring bitmaps representing the least
+                // significant bits of a set of elements.
+                buf += roaring_bitmap_portable_serialize(bitmap32, buf);
+                roaring_bitmap_free_without_containers(bitmap32);
+            }
+
+            // Start a new 32-bit bitmap with the current high 32 bits.
+            art_iterator_t it2 = it;
+            uint32_t containers_with_high32 = 0;
+            while (it2.value != NULL &&
+                   (uint32_t)combine_key(it2.key, 0) == current_high32) {
+                containers_with_high32++;
+                art_iterator_next(&it2);
+            }
+            bitmap32 =
+                roaring_bitmap_create_with_capacity(containers_with_high32);
+
+            prev_high32 = current_high32;
+        }
+        leaf_t leaf = (leaf_t)*it.value;
+        ra_append(&bitmap32->high_low_container,
+                  (uint16_t)(current_high48 >> 16), get_container(r, leaf),
+                  get_typecode(leaf));
+        art_iterator_next(&it);
+    }
+
+    if (bitmap32 != NULL) {
+        // Write as uint32 the most significant 32 bits of the bucket.
+        memcpy(buf, &prev_high32, sizeof(prev_high32));
+        buf += sizeof(prev_high32);
+
+        // Write the 32-bit Roaring bitmaps representing the least
+        // significant bits of a set of elements.
+        buf += roaring_bitmap_portable_serialize(bitmap32, buf);
+        roaring_bitmap_free_without_containers(bitmap32);
+    }
+
+    return buf - initial_buf;
+}
+
+size_t roaring64_bitmap_portable_deserialize_size(const char *buf,
+                                                  size_t maxbytes) {
+    // https://github.com/RoaringBitmap/RoaringFormatSpec#extension-for-64-bit-implementations
+    if (buf == NULL) {
+        return 0;
+    }
+    size_t read_bytes = 0;
+
+    // Read as uint64 the distinct number of "buckets", where a bucket is
+    // defined as the most significant 32 bits of an element.
+    uint64_t buckets;
+    if (read_bytes + sizeof(buckets) > maxbytes) {
+        return 0;
+    }
+    memcpy(&buckets, buf, sizeof(buckets));
+    buf += sizeof(buckets);
+    read_bytes += sizeof(buckets);
+
+    // Buckets should be 32 bits with 4 bits of zero padding.
+    if (buckets > UINT32_MAX) {
+        return 0;
+    }
+
+    // Iterate through buckets ordered by increasing keys.
+    for (uint64_t bucket = 0; bucket < buckets; ++bucket) {
+        // Read as uint32 the most significant 32 bits of the bucket.
+        uint32_t high32;
+        if (read_bytes + sizeof(high32) > maxbytes) {
+            return 0;
+        }
+        buf += sizeof(high32);
+        read_bytes += sizeof(high32);
+
+        // Read the 32-bit Roaring bitmaps representing the least
+        // significant bits of a set of elements.
+        size_t bitmap32_size = roaring_bitmap_portable_deserialize_size(
+            buf, maxbytes - read_bytes);
+        if (bitmap32_size == 0) {
+            return 0;
+        }
+        buf += bitmap32_size;
+        read_bytes += bitmap32_size;
+    }
+    return read_bytes;
+}
+
+roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(
+    const char *buf, size_t maxbytes) {
+    // https://github.com/RoaringBitmap/RoaringFormatSpec#extension-for-64-bit-implementations
+    if (buf == NULL) {
+        return NULL;
+    }
+    size_t read_bytes = 0;
+
+    // Read as uint64 the distinct number of "buckets", where a bucket is
+    // defined as the most significant 32 bits of an element.
+    uint64_t buckets;
+    if (read_bytes + sizeof(buckets) > maxbytes) {
+        return NULL;
+    }
+    memcpy(&buckets, buf, sizeof(buckets));
+    buf += sizeof(buckets);
+    read_bytes += sizeof(buckets);
+
+    // Buckets should be 32 bits with 4 bits of zero padding.
+    if (buckets > UINT32_MAX) {
+        return NULL;
+    }
+
+    roaring64_bitmap_t *r = roaring64_bitmap_create();
+    // Iterate through buckets ordered by increasing keys.
+    int64_t previous_high32 = -1;
+    for (uint64_t bucket = 0; bucket < buckets; ++bucket) {
+        // Read as uint32 the most significant 32 bits of the bucket.
+        uint32_t high32;
+        if (read_bytes + sizeof(high32) > maxbytes) {
+            roaring64_bitmap_free(r);
+            return NULL;
+        }
+        memcpy(&high32, buf, sizeof(high32));
+        buf += sizeof(high32);
+        read_bytes += sizeof(high32);
+        // High 32 bits must be strictly increasing.
+        if (high32 <= previous_high32) {
+            roaring64_bitmap_free(r);
+            return NULL;
+        }
+        previous_high32 = high32;
+
+        // Read the 32-bit Roaring bitmaps representing the least
+        // significant bits of a set of elements.
+        size_t bitmap32_size = roaring_bitmap_portable_deserialize_size(
+            buf, maxbytes - read_bytes);
+        if (bitmap32_size == 0) {
+            roaring64_bitmap_free(r);
+            return NULL;
+        }
+
+        roaring_bitmap_t *bitmap32 = roaring_bitmap_portable_deserialize_safe(
+            buf, maxbytes - read_bytes);
+        if (bitmap32 == NULL) {
+            roaring64_bitmap_free(r);
+            return NULL;
+        }
+        buf += bitmap32_size;
+        read_bytes += bitmap32_size;
+
+        // While we don't attempt to validate much, we must ensure that there
+        // is no duplication in the high 48 bits - inserting into the ART
+        // assumes (or UB) no duplicate keys. The top 32 bits must be unique
+        // because we check for strict increasing values of  high32, but we
+        // must also ensure the top 16 bits within each 32-bit bitmap are also
+        // at least unique (we ensure they're strictly increasing as well,
+        // which they must be for a _valid_ bitmap, since it's cheaper to check)
+        int32_t last_bitmap_key = -1;
+        for (int i = 0; i < bitmap32->high_low_container.size; i++) {
+            uint16_t key = bitmap32->high_low_container.keys[i];
+            if (key <= last_bitmap_key) {
+                roaring_bitmap_free(bitmap32);
+                roaring64_bitmap_free(r);
+                return NULL;
+            }
+            last_bitmap_key = key;
+        }
+
+        // Insert all containers of the 32-bit bitmap into the 64-bit bitmap.
+        move_from_roaring32_offset(r, bitmap32, high32);
+        roaring_bitmap_free(bitmap32);
+    }
+    return r;
+}
+
+// Returns an "element count" for the given container. This has a different
+// meaning for each container type, but the purpose is the minimal information
+// required to serialize the container metadata.
+static inline uint32_t container_get_element_count(const container_t *c,
+                                                   uint8_t typecode) {
+    switch (typecode) {
+        case BITSET_CONTAINER_TYPE: {
+            return ((bitset_container_t *)c)->cardinality;
+        }
+        case ARRAY_CONTAINER_TYPE: {
+            return ((array_container_t *)c)->cardinality;
+        }
+        case RUN_CONTAINER_TYPE: {
+            return ((run_container_t *)c)->n_runs;
+        }
+        default: {
+            assert(false);
+            roaring_unreachable;
+            return 0;
+        }
+    }
+}
+
+static inline size_t container_get_frozen_size(const container_t *c,
+                                               uint8_t typecode) {
+    switch (typecode) {
+        case BITSET_CONTAINER_TYPE: {
+            return BITSET_CONTAINER_SIZE_IN_WORDS * sizeof(uint64_t);
+        }
+        case ARRAY_CONTAINER_TYPE: {
+            return container_get_element_count(c, typecode) * sizeof(uint16_t);
+        }
+        case RUN_CONTAINER_TYPE: {
+            return container_get_element_count(c, typecode) * sizeof(rle16_t);
+        }
+        default: {
+            assert(false);
+            roaring_unreachable;
+            return 0;
+        }
+    }
+}
+
+uint64_t align_size(uint64_t size, uint64_t alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+size_t roaring64_bitmap_frozen_size_in_bytes(const roaring64_bitmap_t *r) {
+    if (!is_shrunken(r)) {
+        return 0;
+    }
+    // Flags.
+    uint64_t size = sizeof(r->flags);
+    // Container count.
+    size += sizeof(r->capacity);
+    // Container element counts.
+    size += r->capacity * sizeof(uint16_t);
+    // Total container sizes.
+    size += 3 * sizeof(uint64_t);
+    // ART (8 byte aligned).
+    size = align_size(size, 8);
+    size += art_size_in_bytes(&r->art);
+
+    uint64_t total_sizes[4] =
+        CROARING_ZERO_INITIALIZER;  // Indexed by typecode.
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t typecode = get_typecode(leaf);
+        total_sizes[typecode] +=
+            container_get_frozen_size(get_container(r, leaf), typecode);
+        art_iterator_next(&it);
+    }
+    // Containers (aligned).
+    size = align_size(size, CROARING_BITSET_ALIGNMENT);
+    size += total_sizes[BITSET_CONTAINER_TYPE];
+    size = align_size(size, alignof(rle16_t));
+    size += total_sizes[ARRAY_CONTAINER_TYPE];
+    size = align_size(size, alignof(uint16_t));
+    size += total_sizes[RUN_CONTAINER_TYPE];
+    // Padding to make overall size a multiple of required alignment.
+    size = align_size(size, CROARING_BITSET_ALIGNMENT);
+    return size;
+}
+
+static inline void container_frozen_serialize(const container_t *container,
+                                              uint8_t typecode,
+                                              uint64_t **bitsets,
+                                              uint16_t **arrays,
+                                              rle16_t **runs) {
+    size_t size = container_get_frozen_size(container, typecode);
+    switch (typecode) {
+        case BITSET_CONTAINER_TYPE: {
+            bitset_container_t *bitset = (bitset_container_t *)container;
+            memcpy(*bitsets, bitset->words, size);
+            *bitsets += BITSET_CONTAINER_SIZE_IN_WORDS;
+            break;
+        }
+        case ARRAY_CONTAINER_TYPE: {
+            array_container_t *array = (array_container_t *)container;
+            memcpy(*arrays, array->array, size);
+            *arrays += container_get_element_count(container, typecode);
+            break;
+        }
+        case RUN_CONTAINER_TYPE: {
+            run_container_t *run = (run_container_t *)container;
+            memcpy(*runs, run->runs, size);
+            *runs += container_get_element_count(container, typecode);
+            break;
+        }
+        default: {
+            assert(false);
+            roaring_unreachable;
+        }
+    }
+}
+
+static inline char *pad_align(char *buf, const char *initial_buf,
+                              size_t alignment) {
+    uint64_t buf_size = buf - initial_buf;
+    uint64_t pad = align_size(buf_size, alignment) - buf_size;
+    memset(buf, 0, pad);
+    return buf + pad;
+}
+
+size_t roaring64_bitmap_frozen_serialize(const roaring64_bitmap_t *r,
+                                         char *buf) {
+    if (buf == NULL) {
+        return 0;
+    }
+    if (!is_shrunken(r)) {
+        return 0;
+    }
+    const char *initial_buf = buf;
+
+    // Flags.
+    memcpy(buf, &r->flags, sizeof(r->flags));
+    buf += sizeof(r->flags);
+
+    // Container count.
+    memcpy(buf, &r->capacity, sizeof(r->capacity));
+    buf += sizeof(r->capacity);
+
+    // Container element counts.
+    uint64_t total_sizes[4] =
+        CROARING_ZERO_INITIALIZER;  // Indexed by typecode.
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t typecode = get_typecode(leaf);
+        container_t *container = get_container(r, leaf);
+
+        uint32_t elem_count = container_get_element_count(container, typecode);
+        uint16_t compressed_elem_count = (uint16_t)(elem_count - 1);
+        memcpy(buf, &compressed_elem_count, sizeof(compressed_elem_count));
+        buf += sizeof(compressed_elem_count);
+
+        total_sizes[typecode] += container_get_frozen_size(container, typecode);
+        art_iterator_next(&it);
+    }
+
+    // Total container sizes.
+    memcpy(buf, &(total_sizes[BITSET_CONTAINER_TYPE]), sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+    memcpy(buf, &(total_sizes[RUN_CONTAINER_TYPE]), sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+    memcpy(buf, &(total_sizes[ARRAY_CONTAINER_TYPE]), sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+
+    // ART.
+    buf = pad_align(buf, initial_buf, 8);
+    buf += art_serialize(&r->art, buf);
+
+    // Containers (aligned).
+    // Runs before arrays as run elements are larger than array elements and
+    // smaller than bitset elements.
+    buf = pad_align(buf, initial_buf, CROARING_BITSET_ALIGNMENT);
+    uint64_t *bitsets = (uint64_t *)buf;
+    buf += total_sizes[BITSET_CONTAINER_TYPE];
+    buf = pad_align(buf, initial_buf, alignof(rle16_t));
+    rle16_t *runs = (rle16_t *)buf;
+    buf += total_sizes[RUN_CONTAINER_TYPE];
+    buf = pad_align(buf, initial_buf, alignof(uint16_t));
+    uint16_t *arrays = (uint16_t *)buf;
+    buf += total_sizes[ARRAY_CONTAINER_TYPE];
+
+    it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t typecode = get_typecode(leaf);
+        container_t *container = get_container(r, leaf);
+        container_frozen_serialize(container, typecode, &bitsets, &arrays,
+                                   &runs);
+        art_iterator_next(&it);
+    }
+
+    // Padding to make overall size a multiple of required alignment.
+    buf = pad_align(buf, initial_buf, CROARING_BITSET_ALIGNMENT);
+
+    return buf - initial_buf;
+}
+
+static container_t *container_frozen_view(uint8_t typecode, uint32_t elem_count,
+                                          const uint64_t **bitsets,
+                                          const uint16_t **arrays,
+                                          const rle16_t **runs) {
+    switch (typecode) {
+        case BITSET_CONTAINER_TYPE: {
+            bitset_container_t *c = (bitset_container_t *)roaring_malloc(
+                sizeof(bitset_container_t));
+            c->cardinality = elem_count;
+            c->words = (uint64_t *)*bitsets;
+            *bitsets += BITSET_CONTAINER_SIZE_IN_WORDS;
+            return (container_t *)c;
+        }
+        case ARRAY_CONTAINER_TYPE: {
+            array_container_t *c =
+                (array_container_t *)roaring_malloc(sizeof(array_container_t));
+            c->cardinality = elem_count;
+            c->capacity = elem_count;
+            c->array = (uint16_t *)*arrays;
+            *arrays += elem_count;
+            return (container_t *)c;
+        }
+        case RUN_CONTAINER_TYPE: {
+            run_container_t *c =
+                (run_container_t *)roaring_malloc(sizeof(run_container_t));
+            c->n_runs = elem_count;
+            c->capacity = elem_count;
+            c->runs = (rle16_t *)*runs;
+            *runs += elem_count;
+            return (container_t *)c;
+        }
+        default: {
+            assert(false);
+            roaring_unreachable;
+            return NULL;
+        }
+    }
+}
+
+roaring64_bitmap_t *roaring64_bitmap_frozen_view(const char *buf,
+                                                 size_t maxbytes) {
+    if (buf == NULL) {
+        return NULL;
+    }
+    if ((uintptr_t)buf % CROARING_BITSET_ALIGNMENT != 0) {
+        return NULL;
+    }
+
+    roaring64_bitmap_t *r = roaring64_bitmap_create();
+
+    // Flags.
+    if (maxbytes < sizeof(r->flags)) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    memcpy(&r->flags, buf, sizeof(r->flags));
+    buf += sizeof(r->flags);
+    maxbytes -= sizeof(r->flags);
+    r->flags |= ROARING_FLAG_FROZEN;
+
+    // Container count.
+    if (maxbytes < sizeof(r->capacity)) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    memcpy(&r->capacity, buf, sizeof(r->capacity));
+    buf += sizeof(r->capacity);
+    maxbytes -= sizeof(r->capacity);
+
+    r->containers =
+        (container_t **)roaring_malloc(r->capacity * sizeof(container_t *));
+
+    // Container element counts.
+    if (maxbytes < r->capacity * sizeof(uint16_t)) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    const char *elem_counts = buf;
+    buf += r->capacity * sizeof(uint16_t);
+    maxbytes -= r->capacity * sizeof(uint16_t);
+
+    // Total container sizes.
+    uint64_t total_sizes[4];
+    if (maxbytes < sizeof(uint64_t) * 3) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    memcpy(&(total_sizes[BITSET_CONTAINER_TYPE]), buf, sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+    maxbytes -= sizeof(uint64_t);
+    memcpy(&(total_sizes[RUN_CONTAINER_TYPE]), buf, sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+    maxbytes -= sizeof(uint64_t);
+    memcpy(&(total_sizes[ARRAY_CONTAINER_TYPE]), buf, sizeof(uint64_t));
+    buf += sizeof(uint64_t);
+    maxbytes -= sizeof(uint64_t);
+
+    // ART (8 byte aligned).
+    buf = CROARING_ALIGN_BUF(buf, 8);
+    size_t art_size = art_frozen_view(buf, maxbytes, &r->art);
+    if (art_size == 0) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    buf += art_size;
+    maxbytes -= art_size;
+
+    // Containers (aligned).
+    const char *before_containers = buf;
+    buf = CROARING_ALIGN_BUF(buf, CROARING_BITSET_ALIGNMENT);
+    const uint64_t *bitsets = (const uint64_t *)buf;
+    buf += total_sizes[BITSET_CONTAINER_TYPE];
+    buf = CROARING_ALIGN_BUF(buf, alignof(rle16_t));
+    const rle16_t *runs = (const rle16_t *)buf;
+    buf += total_sizes[RUN_CONTAINER_TYPE];
+    buf = CROARING_ALIGN_BUF(buf, alignof(uint16_t));
+    const uint16_t *arrays = (const uint16_t *)buf;
+    buf += total_sizes[ARRAY_CONTAINER_TYPE];
+    if (maxbytes < (uint64_t)(buf - before_containers)) {
+        roaring64_bitmap_free(r);
+        return NULL;
+    }
+    maxbytes -= buf - before_containers;
+
+    // Deserialize in ART iteration order.
+    art_iterator_t it = art_init_iterator(&r->art, /*first=*/true);
+    for (size_t i = 0; it.value != NULL; ++i) {
+        leaf_t leaf = (leaf_t)*it.value;
+        uint8_t typecode = get_typecode(leaf);
+
+        uint16_t compressed_elem_count;
+        memcpy(&compressed_elem_count, elem_counts + (i * sizeof(uint16_t)),
+               sizeof(compressed_elem_count));
+        uint32_t elem_count = (uint32_t)(compressed_elem_count) + 1;
+
+        // The container index is unrelated to the iteration order.
+        uint64_t index = get_index(leaf);
+        r->containers[index] = container_frozen_view(typecode, elem_count,
+                                                     &bitsets, &arrays, &runs);
+
+        art_iterator_next(&it);
+    }
+
+    // Padding to make overall size a multiple of required alignment.
+    buf = CROARING_ALIGN_BUF(buf, CROARING_BITSET_ALIGNMENT);
+
+    return r;
+}
+
+bool roaring64_bitmap_iterate(const roaring64_bitmap_t *r,
+                              roaring_iterator64 iterator, void *ptr) {
+    art_iterator_t it = art_init_iterator((art_t *)&r->art, /*first=*/true);
+    while (it.value != NULL) {
+        uint64_t high48 = combine_key(it.key, 0);
+        uint64_t high32 = high48 & 0xFFFFFFFF00000000ULL;
+        uint32_t low32 = high48;
+        leaf_t leaf = (leaf_t)*it.value;
+        if (!container_iterate64(get_container(r, leaf), get_typecode(leaf),
+                                 low32, iterator, high32, ptr)) {
+            return false;
+        }
+        art_iterator_next(&it);
+    }
+    return true;
+}
+
+void roaring64_bitmap_to_uint64_array(const roaring64_bitmap_t *r,
+                                      uint64_t *out) {
+    roaring64_iterator_t it;  // gets initialized in the next line
+    roaring64_iterator_init_at(r, &it, /*first=*/true);
+    roaring64_iterator_read(&it, out, UINT64_MAX);
+}
+
+roaring64_iterator_t *roaring64_iterator_create(const roaring64_bitmap_t *r) {
+    roaring64_iterator_t *it =
+        (roaring64_iterator_t *)roaring_malloc(sizeof(roaring64_iterator_t));
+    return roaring64_iterator_init_at(r, it, /*first=*/true);
+}
+
+roaring64_iterator_t *roaring64_iterator_create_last(
+    const roaring64_bitmap_t *r) {
+    roaring64_iterator_t *it =
+        (roaring64_iterator_t *)roaring_malloc(sizeof(roaring64_iterator_t));
+    return roaring64_iterator_init_at(r, it, /*first=*/false);
+}
+
+void roaring64_iterator_reinit(const roaring64_bitmap_t *r,
+                               roaring64_iterator_t *it) {
+    roaring64_iterator_init_at(r, it, /*first=*/true);
+}
+
+void roaring64_iterator_reinit_last(const roaring64_bitmap_t *r,
+                                    roaring64_iterator_t *it) {
+    roaring64_iterator_init_at(r, it, /*first=*/false);
+}
+
+roaring64_iterator_t *roaring64_iterator_copy(const roaring64_iterator_t *it) {
+    roaring64_iterator_t *new_it =
+        (roaring64_iterator_t *)roaring_malloc(sizeof(roaring64_iterator_t));
+    memcpy(new_it, it, sizeof(*it));
+    return new_it;
+}
+
+void roaring64_iterator_free(roaring64_iterator_t *it) { roaring_free(it); }
+
+bool roaring64_iterator_has_value(const roaring64_iterator_t *it) {
+    return it->has_value;
+}
+
+uint64_t roaring64_iterator_value(const roaring64_iterator_t *it) {
+    return it->value;
+}
+
+bool roaring64_iterator_advance(roaring64_iterator_t *it) {
+    if (it->art_it.value == NULL) {
+        if (it->saturated_forward) {
+            return (it->has_value = false);
+        }
+        roaring64_iterator_init_at(it->r, it, /*first=*/true);
+        return it->has_value;
+    }
+    leaf_t leaf = (leaf_t)*it->art_it.value;
+    uint16_t low16 = (uint16_t)it->value;
+    if (container_iterator_next(get_container(it->r, leaf), get_typecode(leaf),
+                                &it->container_it, &low16)) {
+        it->value = it->high48 | low16;
+        return (it->has_value = true);
+    }
+    if (art_iterator_next(&it->art_it)) {
+        return roaring64_iterator_init_at_leaf_first(it);
+    }
+    it->saturated_forward = true;
+    return (it->has_value = false);
+}
+
+bool roaring64_iterator_previous(roaring64_iterator_t *it) {
+    if (it->art_it.value == NULL) {
+        if (!it->saturated_forward) {
+            // Saturated backward.
+            return (it->has_value = false);
+        }
+        roaring64_iterator_init_at(it->r, it, /*first=*/false);
+        return it->has_value;
+    }
+    leaf_t leaf = (leaf_t)*it->art_it.value;
+    uint16_t low16 = (uint16_t)it->value;
+    if (container_iterator_prev(get_container(it->r, leaf), get_typecode(leaf),
+                                &it->container_it, &low16)) {
+        it->value = it->high48 | low16;
+        return (it->has_value = true);
+    }
+    if (art_iterator_prev(&it->art_it)) {
+        return roaring64_iterator_init_at_leaf_last(it);
+    }
+    it->saturated_forward = false;  // Saturated backward.
+    return (it->has_value = false);
+}
+
+bool roaring64_iterator_move_equalorlarger(roaring64_iterator_t *it,
+                                           uint64_t val) {
+    uint8_t val_high48[ART_KEY_BYTES];
+    uint16_t val_low16 = split_key(val, val_high48);
+    if (!it->has_value || it->high48 != (val & 0xFFFFFFFFFFFF0000)) {
+        // The ART iterator is before or after the high48 bits of `val` (or
+        // beyond the ART altogether), so we need to move to a leaf with a
+        // key equal or greater.
+        if (!art_iterator_lower_bound(&it->art_it, val_high48)) {
+            // Only smaller keys found.
+            it->saturated_forward = true;
+            return (it->has_value = false);
+        }
+        it->high48 = combine_key(it->art_it.key, 0);
+        // Fall through to the next if statement.
+    }
+
+    if (it->high48 == (val & 0xFFFFFFFFFFFF0000)) {
+        // We're at equal high bits, check if a suitable value can be found
+        // in this container.
+        leaf_t leaf = (leaf_t)*it->art_it.value;
+        uint16_t low16 = (uint16_t)it->value;
+        if (container_iterator_lower_bound(
+                get_container(it->r, leaf), get_typecode(leaf),
+                &it->container_it, &low16, val_low16)) {
+            it->value = it->high48 | low16;
+            return (it->has_value = true);
+        }
+        // Only smaller entries in this container, move to the next.
+        if (!art_iterator_next(&it->art_it)) {
+            it->saturated_forward = true;
+            return (it->has_value = false);
+        }
+    }
+
+    // We're at a leaf with high bits greater than `val`, so the first entry
+    // in this container is our result.
+    return roaring64_iterator_init_at_leaf_first(it);
+}
+
+uint64_t roaring64_iterator_read(roaring64_iterator_t *it, uint64_t *buf,
+                                 uint64_t count) {
+    uint64_t consumed = 0;
+    while (it->has_value && consumed < count) {
+        uint32_t container_consumed;
+        leaf_t leaf = (leaf_t)*it->art_it.value;
+        uint16_t low16 = (uint16_t)it->value;
+        uint32_t container_count = UINT32_MAX;
+        if (count - consumed < (uint64_t)UINT32_MAX) {
+            container_count = count - consumed;
+        }
+        bool has_value = container_iterator_read_into_uint64(
+            get_container(it->r, leaf), get_typecode(leaf), &it->container_it,
+            it->high48, buf, container_count, &container_consumed, &low16);
+        consumed += container_consumed;
+        buf += container_consumed;
+        if (has_value) {
+            it->has_value = true;
+            it->value = it->high48 | low16;
+            assert(consumed == count);
+            return consumed;
+        }
+        it->has_value = art_iterator_next(&it->art_it);
+        if (it->has_value) {
+            roaring64_iterator_init_at_leaf_first(it);
+        } else {
+            it->saturated_forward = true;
+        }
+    }
+    return consumed;
+}
+
+#ifdef __cplusplus
+}  // extern "C"
+}  // namespace roaring
+}  // namespace api
+#endif
+
+#line 49 "src/cpp/croaring.cpp"
 
 #if defined(__clang__)
 #  pragma clang diagnostic pop
@@ -31231,4 +37769,4 @@ bool ra_portable_deserialize(roaring_array_t *answer, const char *buf,
 #undef printf
 #undef fprintf
 
-#line 41 "src/cpp/main.cpp"
+#line 44 "src/cpp/main.cpp"
