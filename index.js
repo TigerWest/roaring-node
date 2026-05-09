@@ -931,9 +931,7 @@ if (!roaring[initializedSym]) {
     return this.toArray();
   };
 
-  roaringBitmap64_proto.toString = function () {
-    return "RoaringBitmap64";
-  };
+  roaringBitmap64_proto.toString = () => "RoaringBitmap64";
 
   roaringBitmap64_proto.contentToString = function contentToString(maxLength) {
     const limit = typeof maxLength === "number" && maxLength >= 0 ? maxLength : 32000;

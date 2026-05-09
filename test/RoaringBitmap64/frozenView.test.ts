@@ -55,3 +55,21 @@ describe("RoaringBitmap64.unsafeFrozenView", () => {
     expect([...view]).toEqual([10n, 20n, 30n, 1n << 40n]);
   });
 });
+
+describe("RoaringBitmap64.unsafeFrozenView argument order parity with RB32", () => {
+  it("accepts (storage, format) like RB32", () => {
+    const src = new RoaringBitmap64([1n, 2n, 3n]);
+    const buf = freeze(src);
+    const view = RoaringBitmap64.unsafeFrozenView(buf, "unsafe_frozen_croaring");
+    expect(view.size).toBe(3n);
+    expect(view.has(2n)).toBe(true);
+  });
+
+  it("still accepts (format, storage) (no regression)", () => {
+    const src = new RoaringBitmap64([7n, 8n]);
+    const buf = freeze(src);
+    const view = RoaringBitmap64.unsafeFrozenView("unsafe_frozen_croaring", buf);
+    expect(view.size).toBe(2n);
+    expect(view.has(7n)).toBe(true);
+  });
+});

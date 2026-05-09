@@ -87,13 +87,15 @@ inline void RoaringBitmap64_add(const v8::FunctionCallbackInfo<v8::Value> & info
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.add expects 1 argument");
+  const int n = info.Length();
+  // Zero arguments is a no-op (RB32 parity); silent drop of args 2..N was the
+  // bug we're fixing here, so loop the entire vararg list.
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    roaring64_bitmap_add(self->bitmap, v);
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  roaring64_bitmap_add(self->bitmap, v);
-  self->invalidate();
+  if (n > 0) self->invalidate();
   info.GetReturnValue().Set(info.This());
 }
 
@@ -101,27 +103,28 @@ inline void RoaringBitmap64_tryAdd(const v8::FunctionCallbackInfo<v8::Value> & i
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.tryAdd expects 1 argument");
+  const int n = info.Length();
+  bool anyInserted = false;
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    if (roaring64_bitmap_add_checked(self->bitmap, v)) anyInserted = true;
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  bool inserted = roaring64_bitmap_add_checked(self->bitmap, v);
-  if (inserted) self->invalidate();
-  info.GetReturnValue().Set(inserted);
+  if (anyInserted) self->invalidate();
+  info.GetReturnValue().Set(anyInserted);
 }
 
 inline void RoaringBitmap64_remove(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.remove expects 1 argument");
+  const int n = info.Length();
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    roaring64_bitmap_remove(self->bitmap, v);
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  roaring64_bitmap_remove(self->bitmap, v);
-  self->invalidate();
+  if (n > 0) self->invalidate();
   info.GetReturnValue().Set(info.This());
 }
 
@@ -129,14 +132,15 @@ inline void RoaringBitmap64_delete(const v8::FunctionCallbackInfo<v8::Value> & i
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.delete expects 1 argument");
+  const int n = info.Length();
+  bool anyRemoved = false;
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    if (roaring64_bitmap_remove_checked(self->bitmap, v)) anyRemoved = true;
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  bool removed = roaring64_bitmap_remove_checked(self->bitmap, v);
-  if (removed) self->invalidate();
-  info.GetReturnValue().Set(removed);
+  if (anyRemoved) self->invalidate();
+  info.GetReturnValue().Set(anyRemoved);
 }
 
 inline void RoaringBitmap64_has(const v8::FunctionCallbackInfo<v8::Value> & info) {
@@ -319,19 +323,49 @@ inline void RoaringBitmap64_copyFrom(const v8::FunctionCallbackInfo<v8::Value> &
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.copyFrom");
-  if (other == nullptr) return;
-  if (other == self) {
-    self->invalidate();
+
+  // Zero-arg / null / undefined → clear (RB32 parity).
+  if (info.Length() == 0 || info[0]->IsNullOrUndefined()) {
+    if (!roaring64_bitmap_is_empty(self->bitmap)) {
+      roaring64_bitmap_clear(self->bitmap);
+      self->invalidate();
+    }
     info.GetReturnValue().Set(info.This());
     return;
   }
-  roaring64_bitmap_t * copy = roaring64_bitmap_copy(other->bitmap);
-  if (copy == nullptr) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.copyFrom: allocation failed");
+
+  // RoaringBitmap64 instance → deep-copy path (preserves operand independence).
+  // Use ObjectWrap::TryUnwrap directly: unlike RoaringBitmap64_unwrapOther it
+  // returns nullptr (no throw) on type mismatch so we can fall through to the
+  // iterable path below.
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other != nullptr) {
+    if (other->disposed) {
+      return v8utils::throwTypeError(
+        isolate, "RoaringBitmap64.copyFrom argument must be a non-disposed RoaringBitmap64");
+    }
+    if (other == self) {
+      self->invalidate();
+      info.GetReturnValue().Set(info.This());
+      return;
+    }
+    roaring64_bitmap_t * copy = roaring64_bitmap_copy(other->bitmap);
+    if (copy == nullptr) {
+      return v8utils::throwError(isolate, "RoaringBitmap64.copyFrom: allocation failed");
+    }
+    self->replaceBitmapInstance(isolate, copy);
+    info.GetReturnValue().Set(info.This());
+    return;
   }
-  self->replaceBitmapInstance(isolate, copy);
-  info.GetReturnValue().Set(info.This());
+
+  // Iterable / typed array fall-through: clear FIRST so the result reflects
+  // an overwrite (RB32 parity). If addMany then throws on invalid elements,
+  // self is left empty — same shape as RB32's copyFrom-then-addMany.
+  if (!roaring64_bitmap_is_empty(self->bitmap)) {
+    roaring64_bitmap_clear(self->bitmap);
+    self->invalidate();
+  }
+  RoaringBitmap64_addMany(info);
 }
 
 // ---- freeze / asReadonlyView ----

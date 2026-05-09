@@ -16233,6 +16233,15 @@ inline RoaringBitmap64 * RoaringBitmap64_unwrapOther(
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#  include <io.h>
+#  include <windows.h>
+#else
+#  include <fcntl.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#endif
+
 #line 1 "src/cpp/RoaringBitmap64-bulk.h"
 #ifndef ROARING_NODE_ROARINGBITMAP64_BULK_H_
 #define ROARING_NODE_ROARINGBITMAP64_BULK_H_
@@ -16600,9 +16609,30 @@ inline void RoaringBitmap64_toArray(const v8::FunctionCallbackInfo<v8::Value> & 
 
 #endif  // ROARING_NODE_ROARINGBITMAP64_BULK_H_
 
-#line 17 "src/cpp/RoaringBitmap64-async-workers.h"
+#line 26 "src/cpp/RoaringBitmap64-async-workers.h"
 
 namespace rb64_async_io {
+
+// Configurable upper bound on deserializable file size. Default 16 GiB —
+// generous enough for any roaring64 portable file we expect in practice but
+// small enough that an adversarial path cannot trivially balloon RSS before
+// the parser even runs. Callers with multi-TiB datasets can raise the cap
+// or disable it (set to 0). Read once per process via a static lambda; the
+// env var is sampled on first call and cached.
+inline size_t getMaxDeserializeBytes() {
+  static const size_t cached = []() -> size_t {
+    const char * env = std::getenv("ROARING_NODE_MAX_DESERIALIZE_BYTES");
+    if (env != nullptr && *env != '\0') {
+      char * end = nullptr;
+      unsigned long long v = std::strtoull(env, &end, 10);
+      if (end != env && *end == '\0') {
+        return static_cast<size_t>(v);  // 0 disables the cap entirely
+      }
+    }
+    return static_cast<size_t>(16) << 30;  // 16 GiB default
+  }();
+  return cached;
+}
 
 // Read entire file into a heap buffer. On failure, returns nullptr and writes
 // an error to *outError. Caller owns the returned buffer (gcaware_free).
@@ -16621,6 +16651,15 @@ inline char * readFileFully(const char * path, size_t * outLen, WorkerError * ou
   if (sz < 0) {
     std::fclose(f);
     *outError = WorkerError("RoaringBitmap64.deserializeFileAsync: ftell failed");
+    return nullptr;
+  }
+  const size_t cap = getMaxDeserializeBytes();
+  if (cap != 0 && static_cast<size_t>(sz) > cap) {
+    std::fclose(f);
+    *outError = WorkerError(
+      "RoaringBitmap64.deserializeFileAsync: file exceeds "
+      "ROARING_NODE_MAX_DESERIALIZE_BYTES (set the env var to a higher value, "
+      "or to 0 to disable the cap)");
     return nullptr;
   }
   std::rewind(f);
@@ -16648,18 +16687,81 @@ inline char * readFileFully(const char * path, size_t * outLen, WorkerError * ou
 }
 
 inline bool writeFileFully(const char * path, const char * data, size_t len, WorkerError * outError) {
-  // Write to <path>.tmp then atomically rename to <path>. On any failure the
-  // temp file is removed so we never leave a half-written destination.
+  // Durable atomic write. The contract:
+  //   1. Unique tmp path per call (pid + atomic counter) so concurrent writers
+  //      to the same destination do not collide and a hostile pre-existing
+  //      `<path>.tmp.<known>` symlink cannot redirect us.
+  //   2. Open tmp with O_EXCL+O_NOFOLLOW (POSIX) / CREATE_NEW (Windows) so we
+  //      refuse to follow a symlink or overwrite an existing file there.
+  //   3. fsync (POSIX) / _commit (Windows) before rename so the bytes hit
+  //      stable storage; without this an OS crash between rename and writeback
+  //      can leave the destination zero-filled.
+  //   4. Atomic rename (rename / MoveFileExA with MOVEFILE_REPLACE_EXISTING).
+  //   5. On any failure the tmp is removed so the caller never sees a stub.
+  static std::atomic<uint64_t> tmpCounter{0};
   std::string tmpPath;
-  tmpPath.reserve(std::strlen(path) + 4);
+  tmpPath.reserve(std::strlen(path) + 32);
   tmpPath.assign(path);
-  tmpPath.append(".tmp");
+  tmpPath.append(".tmp.");
+#ifdef _WIN32
+  tmpPath.append(std::to_string(static_cast<uint64_t>(::GetCurrentProcessId())));
+#else
+  tmpPath.append(std::to_string(static_cast<uint64_t>(::getpid())));
+#endif
+  tmpPath.push_back('.');
+  tmpPath.append(std::to_string(tmpCounter.fetch_add(1, std::memory_order_relaxed)));
 
-  FILE * f = std::fopen(tmpPath.c_str(), "wb");
-  if (!f) {
-    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: cannot open file");
+  FILE * f = nullptr;
+#ifdef _WIN32
+  HANDLE h = ::CreateFileA(
+    tmpPath.c_str(),
+    GENERIC_WRITE,
+    0,                  // no sharing
+    nullptr,
+    CREATE_NEW,         // refuse to overwrite (defense vs predicted-path attacks)
+    FILE_ATTRIBUTE_NORMAL,
+    nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: cannot create tmp file");
     return false;
   }
+  int fd = ::_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_WRONLY | _O_BINARY);
+  if (fd < 0) {
+    ::CloseHandle(h);
+    ::DeleteFileA(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: _open_osfhandle failed");
+    return false;
+  }
+  f = ::_fdopen(fd, "wb");
+  if (!f) {
+    ::_close(fd);  // also closes the underlying HANDLE
+    ::DeleteFileA(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: _fdopen failed");
+    return false;
+  }
+#else
+  // O_NOFOLLOW: open(2) returns ELOOP if tmpPath is a symlink — the only
+  //   portable way; fopen("wbx") does not give this guarantee on macOS BSD.
+  // O_EXCL+O_CREAT: refuse to open if the path already exists.
+  // O_CLOEXEC: don't leak the fd to forked children.
+  // Mode 0600: serialized bitmaps may carry confidential data — owner-only.
+  int fd = ::open(
+    tmpPath.c_str(),
+    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+    0600);
+  if (fd < 0) {
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: cannot create tmp file");
+    return false;
+  }
+  f = ::fdopen(fd, "wb");
+  if (!f) {
+    ::close(fd);
+    ::unlink(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fdopen failed");
+    return false;
+  }
+#endif
+
   if (len > 0) {
     size_t w = std::fwrite(data, 1, len, f);
     if (w != len) {
@@ -16669,16 +16771,51 @@ inline bool writeFileFully(const char * path, const char * data, size_t len, Wor
       return false;
     }
   }
+
+  if (std::fflush(f) != 0) {
+    std::fclose(f);
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fflush failed");
+    return false;
+  }
+
+#ifdef _WIN32
+  if (::_commit(::_fileno(f)) != 0) {
+    std::fclose(f);
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: _commit failed");
+    return false;
+  }
+#else
+  if (::fsync(::fileno(f)) != 0) {
+    std::fclose(f);
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fsync failed");
+    return false;
+  }
+#endif
+
   if (std::fclose(f) != 0) {
     std::remove(tmpPath.c_str());
     *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fclose failed");
     return false;
   }
+
+#ifdef _WIN32
+  // std::rename on Windows fails if dest exists; MoveFileExA replaces atomically.
+  if (!::MoveFileExA(tmpPath.c_str(), path,
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: MoveFileExA failed");
+    return false;
+  }
+#else
   if (std::rename(tmpPath.c_str(), path) != 0) {
     std::remove(tmpPath.c_str());
     *outError = WorkerError("RoaringBitmap64.serializeFileAsync: rename failed");
     return false;
   }
+#endif
   return true;
 }
 
@@ -16748,8 +16885,11 @@ class RB64SerializeFileWorker final : public AsyncWorker {
     }
     // shrink_to_fit must run on the main thread because it can re-layout
     // container backing stores; defer the heavier serialization to work().
+    // Bump _version so any in-flight iterator over self sees the layout
+    // change and reports invalidation rather than producing stale values.
     if (this->wantFrozen) {
       roaring64_bitmap_shrink_to_fit(self->bitmap);
+      self->invalidate();
     }
     this->ownedBitmap = roaring64_bitmap_copy(self->bitmap);
     if (this->ownedBitmap == nullptr) {
@@ -16975,8 +17115,11 @@ class RB64SerializeAsyncWorker final : public AsyncWorker {
     }
     // shrink_to_fit must run on the main thread because it can re-layout
     // container backing stores; defer the heavier serialization to work().
+    // Bump _version so any in-flight iterator over self sees the layout
+    // change and reports invalidation rather than producing stale values.
     if (this->wantFrozen) {
       roaring64_bitmap_shrink_to_fit(self->bitmap);
+      self->invalidate();
     }
     this->ownedBitmap = roaring64_bitmap_copy(self->bitmap);
     if (this->ownedBitmap == nullptr) {
@@ -18579,13 +18722,15 @@ inline void RoaringBitmap64_add(const v8::FunctionCallbackInfo<v8::Value> & info
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.add expects 1 argument");
+  const int n = info.Length();
+  // Zero arguments is a no-op (RB32 parity); silent drop of args 2..N was the
+  // bug we're fixing here, so loop the entire vararg list.
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    roaring64_bitmap_add(self->bitmap, v);
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  roaring64_bitmap_add(self->bitmap, v);
-  self->invalidate();
+  if (n > 0) self->invalidate();
   info.GetReturnValue().Set(info.This());
 }
 
@@ -18593,27 +18738,28 @@ inline void RoaringBitmap64_tryAdd(const v8::FunctionCallbackInfo<v8::Value> & i
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.tryAdd expects 1 argument");
+  const int n = info.Length();
+  bool anyInserted = false;
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    if (roaring64_bitmap_add_checked(self->bitmap, v)) anyInserted = true;
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  bool inserted = roaring64_bitmap_add_checked(self->bitmap, v);
-  if (inserted) self->invalidate();
-  info.GetReturnValue().Set(inserted);
+  if (anyInserted) self->invalidate();
+  info.GetReturnValue().Set(anyInserted);
 }
 
 inline void RoaringBitmap64_remove(const v8::FunctionCallbackInfo<v8::Value> & info) {
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.remove expects 1 argument");
+  const int n = info.Length();
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    roaring64_bitmap_remove(self->bitmap, v);
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  roaring64_bitmap_remove(self->bitmap, v);
-  self->invalidate();
+  if (n > 0) self->invalidate();
   info.GetReturnValue().Set(info.This());
 }
 
@@ -18621,14 +18767,15 @@ inline void RoaringBitmap64_delete(const v8::FunctionCallbackInfo<v8::Value> & i
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  if (info.Length() < 1) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.delete expects 1 argument");
+  const int n = info.Length();
+  bool anyRemoved = false;
+  for (int i = 0; i < n; ++i) {
+    uint64_t v;
+    if (!roaring_node_bigint::readUint64BigInt(isolate, info[i], &v, "value")) return;
+    if (roaring64_bitmap_remove_checked(self->bitmap, v)) anyRemoved = true;
   }
-  uint64_t v;
-  if (!roaring_node_bigint::readUint64BigInt(isolate, info[0], &v, "value")) return;
-  bool removed = roaring64_bitmap_remove_checked(self->bitmap, v);
-  if (removed) self->invalidate();
-  info.GetReturnValue().Set(removed);
+  if (anyRemoved) self->invalidate();
+  info.GetReturnValue().Set(anyRemoved);
 }
 
 inline void RoaringBitmap64_has(const v8::FunctionCallbackInfo<v8::Value> & info) {
@@ -18811,19 +18958,49 @@ inline void RoaringBitmap64_copyFrom(const v8::FunctionCallbackInfo<v8::Value> &
   v8::Isolate * isolate = info.GetIsolate();
   RoaringBitmap64 * self = RoaringBitmap64_unwrapForMutation(isolate, info.This());
   if (self == nullptr) return;
-  RoaringBitmap64 * other = RoaringBitmap64_unwrapOther(isolate, info, "RoaringBitmap64.copyFrom");
-  if (other == nullptr) return;
-  if (other == self) {
-    self->invalidate();
+
+  // Zero-arg / null / undefined → clear (RB32 parity).
+  if (info.Length() == 0 || info[0]->IsNullOrUndefined()) {
+    if (!roaring64_bitmap_is_empty(self->bitmap)) {
+      roaring64_bitmap_clear(self->bitmap);
+      self->invalidate();
+    }
     info.GetReturnValue().Set(info.This());
     return;
   }
-  roaring64_bitmap_t * copy = roaring64_bitmap_copy(other->bitmap);
-  if (copy == nullptr) {
-    return v8utils::throwError(isolate, "RoaringBitmap64.copyFrom: allocation failed");
+
+  // RoaringBitmap64 instance → deep-copy path (preserves operand independence).
+  // Use ObjectWrap::TryUnwrap directly: unlike RoaringBitmap64_unwrapOther it
+  // returns nullptr (no throw) on type mismatch so we can fall through to the
+  // iterable path below.
+  RoaringBitmap64 * other = ObjectWrap::TryUnwrap<RoaringBitmap64>(info[0], isolate);
+  if (other != nullptr) {
+    if (other->disposed) {
+      return v8utils::throwTypeError(
+        isolate, "RoaringBitmap64.copyFrom argument must be a non-disposed RoaringBitmap64");
+    }
+    if (other == self) {
+      self->invalidate();
+      info.GetReturnValue().Set(info.This());
+      return;
+    }
+    roaring64_bitmap_t * copy = roaring64_bitmap_copy(other->bitmap);
+    if (copy == nullptr) {
+      return v8utils::throwError(isolate, "RoaringBitmap64.copyFrom: allocation failed");
+    }
+    self->replaceBitmapInstance(isolate, copy);
+    info.GetReturnValue().Set(info.This());
+    return;
   }
-  self->replaceBitmapInstance(isolate, copy);
-  info.GetReturnValue().Set(info.This());
+
+  // Iterable / typed array fall-through: clear FIRST so the result reflects
+  // an overwrite (RB32 parity). If addMany then throws on invalid elements,
+  // self is left empty — same shape as RB32's copyFrom-then-addMany.
+  if (!roaring64_bitmap_is_empty(self->bitmap)) {
+    roaring64_bitmap_clear(self->bitmap);
+    self->invalidate();
+  }
+  RoaringBitmap64_addMany(info);
 }
 
 // ---- freeze / asReadonlyView ----

@@ -2757,18 +2757,21 @@ export class RoaringBitmap64 {
   readonly isFrozen: boolean;
 
   /**
-   * Adds the value. Throws TypeError if the value is not a BigInt or
-   * RangeError if the value is negative or >= 2^64.
+   * Adds one or more values. Zero arguments is a no-op. Throws TypeError if
+   * any value is not a BigInt or RangeError if any value is negative or
+   * >= 2^64. RB64 deliberately accepts only `bigint` (no string/null
+   * coercion) for type safety; RB32's leniency is a legacy artefact.
    */
-  add(value: bigint): this;
+  add(...values: bigint[]): this;
   /**
-   * Adds the value if not already present. Returns true if newly inserted,
-   * false if it was already in the set.
+   * Tries to add one or more values. Returns true if at least one value was
+   * newly inserted, false if every value was already present (or zero args).
    */
-  tryAdd(value: bigint): boolean;
-  remove(value: bigint): this;
-  /** Removes the value, returning true if it was present. */
-  delete(value: bigint): boolean;
+  tryAdd(...values: bigint[]): boolean;
+  /** Removes one or more values. Zero arguments is a no-op. Returns this. */
+  remove(...values: bigint[]): this;
+  /** Removes one or more values, returning true if any were actually present. */
+  delete(...values: bigint[]): boolean;
   has(value: bigint): boolean;
   contains(value: bigint): boolean;
   includes(value: bigint): boolean;
@@ -2897,14 +2900,13 @@ export class RoaringBitmap64 {
   flipRange(rangeStart: bigint, rangeEnd: bigint): this;
 
   /**
-   * Replaces this bitmap's contents with a deep copy of `other`. Returns
-   * this. Operands are independent afterwards.
-   *
-   * RB32's `copyFrom` also accepts an iterable / Uint32Array; the RB64
-   * version takes only another RoaringBitmap64. For the iterable form,
-   * use `b.clear(); b.addMany(iter)` instead.
+   * Replaces this bitmap's contents with a deep copy of `other`, or with the
+   * elements of `values` when an iterable / typed array is provided. Returns
+   * this. Operands are independent afterwards. `null` / `undefined` / no
+   * argument clears the bitmap. Mirrors RB32's `copyFrom` surface (RB64
+   * accepts only `BigUint64Array` / `Iterable<bigint>` — bigint-only).
    */
-  copyFrom(other: RoaringBitmap64): this;
+  copyFrom(other: RoaringBitmap64 | BigUint64Array | Iterable<bigint> | null | undefined): this;
 
   /**
    * Removes run containers from the bitmap, restoring array/bitset
@@ -3011,13 +3013,12 @@ export class RoaringBitmap64 {
   statistics(): RoaringBitmap64Statistics;
 
   /**
-   * Throws if the bitmap fails internal consistency checks (the error message
-   * comes from CRoaring). Returns void on success. Intended use: after
-   * `deserialize()` from an untrusted source.
-   *
-   * Note: RB64 throws on failure; RB32's `internalValidate` returns the
-   * reason string instead. This intentional divergence simplifies the
-   * PostgreSQL `bytea` ingestion path.
+   * Validates internal invariants of the underlying CRoaring 64-bit bitmap
+   * (container shapes, run boundaries, cardinality consistency). Throws an
+   * `Error` with a human-readable reason (sourced from CRoaring) when
+   * validation fails. Returns void on success. Intended for tests, fuzz
+   * harnesses, and development-time assertions after `deserialize()` from an
+   * untrusted source — production code should not need to call it.
    */
   internalValidate(): void;
 
@@ -3247,8 +3248,12 @@ export class RoaringBitmap64 {
    * portable-frozen format equivalent.
    */
   static unsafeFrozenView(
+    storage: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
     format: "unsafe_frozen_croaring",
-    buffer: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+  ): RoaringBitmap64;
+  static unsafeFrozenView(
+    format: "unsafe_frozen_croaring",
+    storage: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
   ): RoaringBitmap64;
 
   /**
@@ -3336,8 +3341,13 @@ export class RoaringBitmap64 {
 
 /**
  * Forward iterator over the values of a RoaringBitmap64.
+ *
+ * Yields BigInts from the smallest to the largest. The constructor throws
+ * when `bitmap` is `null`, `undefined`, or a disposed RoaringBitmap64.
+ * `next()` throws if the source bitmap is mutated or disposed mid-iteration.
  */
 export class RoaringBitmap64Iterator implements IterableIterator<bigint> {
+  constructor(bitmap: RoaringBitmap64);
   next(): IteratorResult<bigint>;
   [Symbol.iterator](): this;
 }
