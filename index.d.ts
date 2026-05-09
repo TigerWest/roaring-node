@@ -2698,6 +2698,8 @@ export interface RoaringBitmap64Statistics {
   minValue: bigint | undefined;
   /** Total number of values stored in the bitmap. */
   size: bigint;
+  /** True when the bitmap is frozen (hard-frozen view or frozen instance). */
+  isFrozen: boolean;
 }
 
 /**
@@ -2732,6 +2734,7 @@ export interface ReadonlyRoaringBitmap64 {
   toArray(): bigint[];
   toUint64Array(): BigUint64Array;
   serialize(format?: "portable"): Buffer;
+  statistics(): RoaringBitmap64Statistics;
   [Symbol.iterator](): IterableIterator<bigint>;
 }
 

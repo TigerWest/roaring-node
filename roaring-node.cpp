@@ -16625,7 +16625,7 @@ inline char * readFileFully(const char * path, size_t * outLen, WorkerError * ou
   }
   std::rewind(f);
   size_t size = (size_t)sz;
-  char * buf = (size == 0) ? static_cast<char *>(std::malloc(1))
+  char * buf = (size == 0) ? static_cast<char *>(gcaware_malloc(1))
                            : static_cast<char *>(gcaware_malloc(size));
   if (!buf) {
     std::fclose(f);
@@ -16648,7 +16648,14 @@ inline char * readFileFully(const char * path, size_t * outLen, WorkerError * ou
 }
 
 inline bool writeFileFully(const char * path, const char * data, size_t len, WorkerError * outError) {
-  FILE * f = std::fopen(path, "wb");
+  // Write to <path>.tmp then atomically rename to <path>. On any failure the
+  // temp file is removed so we never leave a half-written destination.
+  std::string tmpPath;
+  tmpPath.reserve(std::strlen(path) + 4);
+  tmpPath.assign(path);
+  tmpPath.append(".tmp");
+
+  FILE * f = std::fopen(tmpPath.c_str(), "wb");
   if (!f) {
     *outError = WorkerError("RoaringBitmap64.serializeFileAsync: cannot open file");
     return false;
@@ -16657,11 +16664,21 @@ inline bool writeFileFully(const char * path, const char * data, size_t len, Wor
     size_t w = std::fwrite(data, 1, len, f);
     if (w != len) {
       std::fclose(f);
+      std::remove(tmpPath.c_str());
       *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fwrite short");
       return false;
     }
   }
-  std::fclose(f);
+  if (std::fclose(f) != 0) {
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: fclose failed");
+    return false;
+  }
+  if (std::rename(tmpPath.c_str(), path) != 0) {
+    std::remove(tmpPath.c_str());
+    *outError = WorkerError("RoaringBitmap64.serializeFileAsync: rename failed");
+    return false;
+  }
   return true;
 }
 
@@ -16671,20 +16688,26 @@ class RB64SerializeFileWorker final : public AsyncWorker {
  public:
   v8::Global<v8::Object> bitmapPersistent;
   std::string filePath;
-  // Heap-owned snapshot prepared on the main thread (ctor); written off-thread.
+  // Owned clone of the source bitmap. Cloning on the main thread inside the
+  // ctor (while the source is guaranteed alive) lets the worker thread read
+  // its own copy even if the user calls dispose() before the worker resolves.
+  roaring64_bitmap_t * ownedBitmap;
+  // Heap-owned snapshot allocated and filled in work(); freed in the dtor.
   char * snapshot;
   size_t snapshotLen;
+  bool wantFrozen;
 
   explicit RB64SerializeFileWorker(
     const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
     AsyncWorker(infoArg.GetIsolate(), addonDataArg),
+    ownedBitmap(nullptr),
     snapshot(nullptr),
-    snapshotLen(0) {
+    snapshotLen(0),
+    wantFrozen(false) {
     _gcaware_adjustAllocatedMemory(this->isolate, sizeof(RB64SerializeFileWorker));
 
-    // All input parsing happens here on the main thread. We must not stash a
-    // reference to `infoArg` and read it later: by the time before() runs,
-    // the V8 callback frame may already have been torn down.
+    // All input parsing happens on the main thread. Heavy serialization is
+    // deferred to work() so the event loop is not blocked.
     v8::Isolate * iso = this->isolate;
     if (infoArg.Length() < 1 || !infoArg[0]->IsString()) {
       this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: filePath must be a string"));
@@ -16697,17 +16720,16 @@ class RB64SerializeFileWorker final : public AsyncWorker {
     }
     this->filePath.assign(*pathUtf, pathUtf.length());
 
-    bool wantFrozen = false;
     if (infoArg.Length() >= 2 && !infoArg[1]->IsUndefined()) {
       SerializationFormat fmt = tryParseSerializationFormat(infoArg[1], iso);
       if (fmt == SerializationFormat::portable) {
-        wantFrozen = false;
+        this->wantFrozen = false;
       } else if (fmt == SerializationFormat::unsafe_frozen_croaring) {
-        wantFrozen = true;
+        this->wantFrozen = true;
       } else {
         this->setError(WorkerError(
           "RoaringBitmap64.serializeFileAsync: format must be 'portable' or 'unsafe_frozen_croaring'"));
-      return;
+        return;
       }
     }
 
@@ -16719,59 +16741,71 @@ class RB64SerializeFileWorker final : public AsyncWorker {
     if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
     this->bitmapPersistent.Reset(iso, infoArg.This());
 
-    if (wantFrozen) {
-      if (self->isFrozenHard()) {
-        this->setError(WorkerError(
-          "RoaringBitmap64.serializeFileAsync(frozen) cannot operate on a frozen view"));
+    if (this->wantFrozen && self->isFrozenHard()) {
+      this->setError(WorkerError(
+        "RoaringBitmap64.serializeFileAsync(frozen) cannot operate on a frozen view"));
       return;
-      }
+    }
+    // shrink_to_fit must run on the main thread because it can re-layout
+    // container backing stores; defer the heavier serialization to work().
+    if (this->wantFrozen) {
       roaring64_bitmap_shrink_to_fit(self->bitmap);
-      size_t size = roaring64_bitmap_frozen_size_in_bytes(self->bitmap);
-      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
-      if (!this->snapshot) {
-        this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
+    }
+    this->ownedBitmap = roaring64_bitmap_copy(self->bitmap);
+    if (this->ownedBitmap == nullptr) {
+      this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: clone failed"));
       return;
-      }
-      if (size > 0) {
-        size_t w = roaring64_bitmap_frozen_serialize(self->bitmap, this->snapshot);
-        if (w != size) {
-          this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: frozen size mismatch"));
-      return;
-        }
-      }
-      this->snapshotLen = size;
-    } else {
-      size_t size = roaring64_bitmap_portable_size_in_bytes(self->bitmap);
-      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
-      if (!this->snapshot) {
-        this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
-      return;
-      }
-      if (size > 0) {
-        size_t w = roaring64_bitmap_portable_serialize(self->bitmap, this->snapshot);
-        if (w != size) {
-          this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: portable size mismatch"));
-      return;
-        }
-      }
-      this->snapshotLen = size;
     }
   }
 
   ~RB64SerializeFileWorker() override {
     if (snapshot) gcaware_free(snapshot);
+    if (ownedBitmap) roaring64_bitmap_free(ownedBitmap);
     _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64SerializeFileWorker));
   }
 
  protected:
   void before() final {
-    // All parsing happened in the ctor. Any error is already on _error.
+    // All parsing happened in the ctor.
   }
 
   void work() final {
     if (this->hasError()) return;
+    if (this->ownedBitmap == nullptr) {
+      return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: null bitmap"));
+    }
+
+    if (this->wantFrozen) {
+      size_t size = roaring64_bitmap_frozen_size_in_bytes(this->ownedBitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_frozen_serialize(this->ownedBitmap, this->snapshot);
+        if (w != size) {
+          return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: frozen size mismatch"));
+        }
+      }
+      this->snapshotLen = size;
+    } else {
+      size_t size = roaring64_bitmap_portable_size_in_bytes(this->ownedBitmap);
+      this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
+      if (!this->snapshot) {
+        return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: alloc failed"));
+      }
+      if (size > 0) {
+        size_t w = roaring64_bitmap_portable_serialize(this->ownedBitmap, this->snapshot);
+        if (w != size) {
+          return this->setError(WorkerError("RoaringBitmap64.serializeFileAsync: portable size mismatch"));
+        }
+      }
+      this->snapshotLen = size;
+    }
+
     WorkerError err;
-    if (!rb64_async_io::writeFileFully(this->filePath.c_str(), this->snapshot, this->snapshotLen, &err)) {
+    if (!rb64_async_io::writeFileFully(
+          this->filePath.c_str(), this->snapshot, this->snapshotLen, &err)) {
       this->setError(err);
     }
   }
@@ -16891,11 +16925,10 @@ inline void rb64_async_buffer_free(char * data, void * /*hint*/) {
 class RB64SerializeAsyncWorker final : public AsyncWorker {
  public:
   v8::Global<v8::Object> bitmapPersistent;
-  // Borrowed bitmap pointer captured on the main thread. The persistent
-  // above keeps the wrapper (and its bitmap) alive across the worker hop.
-  // CRoaring read-only operations are safe off-thread provided no other
-  // thread mutates the bitmap — this is the standard *Async user contract.
-  const roaring64_bitmap_t * bitmap;
+  // Owned clone of the source bitmap. Cloned on the main thread inside the
+  // ctor (where the source is guaranteed alive); the worker thread reads its
+  // own copy so that dispose() racing the worker cannot trigger a UAF.
+  roaring64_bitmap_t * ownedBitmap;
   // Heap-owned snapshot allocated and filled in work(); done() transfers
   // ownership to a node::Buffer via rb64_async_buffer_free.
   char * snapshot;
@@ -16906,7 +16939,7 @@ class RB64SerializeAsyncWorker final : public AsyncWorker {
   explicit RB64SerializeAsyncWorker(
     const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
     AsyncWorker(infoArg.GetIsolate(), addonDataArg),
-    bitmap(nullptr),
+    ownedBitmap(nullptr),
     snapshot(nullptr),
     snapshotLen(0),
     wantFrozen(false),
@@ -16945,41 +16978,46 @@ class RB64SerializeAsyncWorker final : public AsyncWorker {
     if (this->wantFrozen) {
       roaring64_bitmap_shrink_to_fit(self->bitmap);
     }
-    this->bitmap = self->bitmap;
+    this->ownedBitmap = roaring64_bitmap_copy(self->bitmap);
+    if (this->ownedBitmap == nullptr) {
+      this->setError(WorkerError("RoaringBitmap64.serializeAsync: clone failed"));
+      return;
+    }
   }
 
   ~RB64SerializeAsyncWorker() override {
     if (snapshotOwned && snapshot) gcaware_free(snapshot);
+    if (ownedBitmap) roaring64_bitmap_free(ownedBitmap);
     _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64SerializeAsyncWorker));
   }
 
  protected:
   void work() final {
     if (this->hasError()) return;
-    if (this->bitmap == nullptr) {
+    if (this->ownedBitmap == nullptr) {
       return this->setError(WorkerError("RoaringBitmap64.serializeAsync: null bitmap"));
     }
     if (this->wantFrozen) {
-      size_t size = roaring64_bitmap_frozen_size_in_bytes(this->bitmap);
+      size_t size = roaring64_bitmap_frozen_size_in_bytes(this->ownedBitmap);
       this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
       if (!this->snapshot) {
         return this->setError(WorkerError("RoaringBitmap64.serializeAsync: alloc failed"));
       }
       if (size > 0) {
-        size_t w = roaring64_bitmap_frozen_serialize(this->bitmap, this->snapshot);
+        size_t w = roaring64_bitmap_frozen_serialize(this->ownedBitmap, this->snapshot);
         if (w != size) {
           return this->setError(WorkerError("RoaringBitmap64.serializeAsync: frozen size mismatch"));
         }
       }
       this->snapshotLen = size;
     } else {
-      size_t size = roaring64_bitmap_portable_size_in_bytes(this->bitmap);
+      size_t size = roaring64_bitmap_portable_size_in_bytes(this->ownedBitmap);
       this->snapshot = static_cast<char *>(gcaware_malloc(size == 0 ? 1 : size));
       if (!this->snapshot) {
         return this->setError(WorkerError("RoaringBitmap64.serializeAsync: alloc failed"));
       }
       if (size > 0) {
-        size_t w = roaring64_bitmap_portable_serialize(this->bitmap, this->snapshot);
+        size_t w = roaring64_bitmap_portable_serialize(this->ownedBitmap, this->snapshot);
         if (w != size) {
           return this->setError(WorkerError("RoaringBitmap64.serializeAsync: portable size mismatch"));
         }
@@ -17091,9 +17129,10 @@ class RB64DeserializeBufferAsyncWorker final : public AsyncWorker {
 class RB64ToUint64ArrayWorker final : public AsyncWorker {
  public:
   v8::Global<v8::Object> bitmapPersistent;
-  // Borrowed bitmap pointer captured on the main thread. The persistent
-  // above keeps the wrapper (and its bitmap) alive across the hop.
-  const roaring64_bitmap_t * bitmap;
+  // Owned clone of the source bitmap. Cloning on the main thread inside the
+  // ctor (where the source is guaranteed alive) lets the worker thread read
+  // its own copy even if the user calls dispose() before the worker resolves.
+  roaring64_bitmap_t * ownedBitmap;
   // Heap-owned values. work() allocates and fills; done() wraps and transfers.
   uint64_t * values;
   size_t valuesLen;
@@ -17102,7 +17141,7 @@ class RB64ToUint64ArrayWorker final : public AsyncWorker {
   explicit RB64ToUint64ArrayWorker(
     const v8::FunctionCallbackInfo<v8::Value> & infoArg, AddonData * addonDataArg) :
     AsyncWorker(infoArg.GetIsolate(), addonDataArg),
-    bitmap(nullptr),
+    ownedBitmap(nullptr),
     values(nullptr),
     valuesLen(0),
     valuesOwned(true) {
@@ -17116,19 +17155,24 @@ class RB64ToUint64ArrayWorker final : public AsyncWorker {
     }
     if (this->maybeAddonData == nullptr) this->maybeAddonData = self->addonData;
     this->bitmapPersistent.Reset(iso, infoArg.This());
-    this->bitmap = self->bitmap;
+    this->ownedBitmap = roaring64_bitmap_copy(self->bitmap);
+    if (this->ownedBitmap == nullptr) {
+      this->setError(WorkerError("RoaringBitmap64.toUint64ArrayAsync: clone failed"));
+      return;
+    }
   }
 
   ~RB64ToUint64ArrayWorker() override {
     if (valuesOwned && values) gcaware_free(values);
+    if (ownedBitmap) roaring64_bitmap_free(ownedBitmap);
     _gcaware_adjustAllocatedMemory(this->isolate, -sizeof(RB64ToUint64ArrayWorker));
   }
 
  protected:
   void work() final {
     if (this->hasError()) return;
-    if (this->bitmap == nullptr) return;
-    uint64_t card = roaring64_bitmap_get_cardinality(this->bitmap);
+    if (this->ownedBitmap == nullptr) return;
+    uint64_t card = roaring64_bitmap_get_cardinality(this->ownedBitmap);
     if (card > (uint64_t)(SIZE_MAX / sizeof(uint64_t))) {
       return this->setError(WorkerError(
         "RoaringBitmap64.toUint64ArrayAsync: cardinality exceeds size_t limit"));
@@ -17141,7 +17185,7 @@ class RB64ToUint64ArrayWorker final : public AsyncWorker {
     if (!this->values) {
       return this->setError(WorkerError("RoaringBitmap64.toUint64ArrayAsync: alloc failed"));
     }
-    roaring64_bitmap_to_uint64_array(this->bitmap, this->values);
+    roaring64_bitmap_to_uint64_array(this->ownedBitmap, this->values);
     this->valuesLen = (size_t)card;
   }
 
@@ -18968,6 +19012,11 @@ inline void RoaringBitmap64_statistics(const v8::FunctionCallbackInfo<v8::Value>
       NEW_LITERAL_V8_STRING(isolate, "maxValue", v8::NewStringType::kInternalized),
       roaring_node_bigint::makeUint64BigInt(isolate, st.max_value)));
   }
+
+  ignoreMaybeResult(obj->Set(
+    context,
+    NEW_LITERAL_V8_STRING(isolate, "isFrozen", v8::NewStringType::kInternalized),
+    v8::Boolean::New(isolate, self->isFrozen())));
 
   info.GetReturnValue().Set(obj);
 }

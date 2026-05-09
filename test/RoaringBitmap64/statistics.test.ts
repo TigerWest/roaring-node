@@ -44,3 +44,25 @@ describe("RoaringBitmap64.statistics", () => {
     expect(() => b.statistics()).toThrow();
   });
 });
+
+describe("RoaringBitmap64.statistics().isFrozen", () => {
+  it("is false on a fresh bitmap", () => {
+    const bm = new RoaringBitmap64();
+    bm.add(1n);
+    expect(bm.statistics().isFrozen).toBe(false);
+  });
+
+  it("is true after freeze()", () => {
+    const bm = new RoaringBitmap64();
+    bm.add(1n);
+    bm.freeze();
+    expect(bm.statistics().isFrozen).toBe(true);
+  });
+
+  it("is true on asReadonlyView() result", () => {
+    const bm = new RoaringBitmap64();
+    bm.add(1n);
+    const view = bm.asReadonlyView();
+    expect(view.statistics().isFrozen).toBe(true);
+  });
+});

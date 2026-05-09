@@ -521,6 +521,11 @@ inline void RoaringBitmap64_statistics(const v8::FunctionCallbackInfo<v8::Value>
       roaring_node_bigint::makeUint64BigInt(isolate, st.max_value)));
   }
 
+  ignoreMaybeResult(obj->Set(
+    context,
+    NEW_LITERAL_V8_STRING(isolate, "isFrozen", v8::NewStringType::kInternalized),
+    v8::Boolean::New(isolate, self->isFrozen())));
+
   info.GetReturnValue().Set(obj);
 }
 
