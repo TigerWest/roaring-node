@@ -97,7 +97,7 @@ const serialized = bitmap3.serialize(false);
 console.log("serialized:", serialized.toString("base64"));
 console.log(
   "deserialized:",
-  RoaringBitmap32.deserialize(serialized, false).toArray()
+  RoaringBitmap32.deserialize(serialized, false).toArray(),
 );
 ```
 
@@ -293,7 +293,7 @@ NodeJS   : v16.13.1 - V8 v9.4.146.24-node.14
 
 Works on M1 Max with `RoaringBitmap64` (BigInt 64-bit) included
 
-````
+```
 Platform : Darwin 25.2.0 arm64
 CPU      : Apple M1 Max
 Cores    : 10 physical - 10 logical
@@ -394,7 +394,66 @@ NodeJS   : v22.12.0 - V8 v12.4.254.21-node.21
   ✔ RoaringBitmap32  3,786.80 ops/sec  ±1.44%  1894 runs  fastest
   ✔ RoaringBitmap64  1,572.23 ops/sec  ±0.34%   787 runs  -58.48%
   ➔ Fastest is RoaringBitmap32
-````
+```
+
+### Memory benchmarks (RoaringBitmap64 vs `Set<bigint>`)
+
+`RoaringBitmap64` is internally a map of 32-bit bitmaps, so on values that
+spread across many high 32-bit buckets it can use more memory than a native
+`Set<bigint>`. To measure this, run:
+
+```sh
+npm run benchmarks:memory
+```
+
+The benchmark builds the same values with `Set<number>`, `Set<bigint>`,
+`RoaringBitmap32`, and `RoaringBitmap64` across several distributions.
+
+Sample output (Apple M1, Node 22, `n` is the number of values inserted):
+
+```
+## 1. Dense low-range (every 3rd integer in [0, 3n))  (n = 1,000,000)
+impl                        container/heap      per value     serialized   array/run/bitset
+Set<number>                      20.01 MiB    20.98 B/val              —   —
+Set<bigint>                      42.89 MiB    44.97 B/val              —   —
+RoaringBitmap32                  368.0 KiB     0.38 B/val      368.4 KiB   0/0/46
+RoaringBitmap64                  368.0 KiB     0.38 B/val      368.4 KiB   0/0/46
+
+## 2. Sparse random 32-bit values  (n = 100,000)
+impl                        container/heap      per value     serialized   array/run/bitset
+Set<number>                       3.26 MiB    34.23 B/val              —   —
+Set<bigint>                       4.79 MiB    50.23 B/val              —   —
+RoaringBitmap32                  195.3 KiB     2.00 B/val      658.3 KiB   59261/0/0
+RoaringBitmap64                  195.3 KiB     2.00 B/val      658.3 KiB   59261/0/0
+
+## 3. Contiguous run [0, n)  (n = 1,000,000)
+impl                        container/heap      per value     serialized   array/run/bitset
+Set<number>                      20.00 MiB    20.98 B/val              —   —
+Set<bigint>                      42.89 MiB    44.98 B/val              —   —
+RoaringBitmap32                  128.0 KiB     0.13 B/val      128.1 KiB   0/0/16
+RoaringBitmap32 (run-opt)             96 B     0.00 B/val          230 B   0/16/0
+RoaringBitmap64                  128.0 KiB     0.13 B/val      128.1 KiB   0/0/16
+RoaringBitmap64 (run-opt)             96 B     0.00 B/val          242 B   0/16/0
+
+## 4. Very sparse 64-bit (one value per high bucket)  (n = 10,000)
+impl                        container/heap      per value     serialized   array/run/bitset
+Set<bigint>                      560.2 KiB    57.36 B/val              —   —
+RoaringBitmap64                   19.5 KiB     2.00 B/val      214.9 KiB   10000/0/0
+
+## 5. Clustered 64-bit (1024 high buckets x 1024 vals each)  (n = 1,048,576)
+impl                        container/heap      per value     serialized   array/run/bitset
+Set<bigint>                      44.01 MiB    44.01 B/val              —   —
+RoaringBitmap64                   2.00 MiB     2.00 B/val       2.02 MiB   1024/0/0
+RoaringBitmap64 (run-opt)          6.0 KiB     0.01 B/val       19.0 KiB   0/1024/0
+```
+
+Columns:
+
+- `container/heap` — `bytesIn{Array,Run,Bitset}Containers` from
+  `statistics()` for roaring rows; process heap delta for `Set` rows.
+- `serialized` — `getSerializationSizeInBytes("portable")`.
+- `array/run/bitset` — container-mix after construction; `(run-opt)` rows
+  are after `runOptimize()` + `shrinkToFit()`.
 
 ## Branches
 
